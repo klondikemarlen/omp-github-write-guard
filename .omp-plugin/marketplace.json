@@ -1,0 +1,19 @@
+{
+  "name": "omp-github-write-guard",
+  "owner": {
+    "name": "klondikemarlen"
+  },
+  "metadata": {
+    "description": "Opt-in checkout-bound GitHub write protection for OMP."
+  },
+  "plugins": [
+    {
+      "name": "omp-github-write-guard",
+      "description": "Classify and guard GitHub writes outside the current checkout.",
+      "source": "./",
+      "category": "security",
+      "tags": ["github", "safety", "omp"],
+      "repository": "https://github.com/klondikemarlen/omp-github-write-guard"
+    }
+  ]
+}
