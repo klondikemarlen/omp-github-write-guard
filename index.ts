@@ -29,16 +29,15 @@ type ExtensionAPI = {
   logger?: { warn(message: string): void };
 };
 
+export type CreationPolicy = "allow" | "confirm";
 export type GuardPolicy = {
-  trustedOwners?: string[];
-  allowOwnedIssueCreation?: boolean;
-  blockExternalPullRequests?: boolean;
+  issueCreationPolicies?: Record<string, CreationPolicy>;
+  pullRequestCreationPolicies?: Record<string, CreationPolicy>;
 };
 
 export const DEFAULT_POLICY: Required<GuardPolicy> = {
-  trustedOwners: [],
-  allowOwnedIssueCreation: false,
-  blockExternalPullRequests: false,
+  issueCreationPolicies: {},
+  pullRequestCreationPolicies: {},
 };
 
 const GITHUB_WRITE_OPERATIONS: Record<string, true> = {
@@ -165,25 +164,22 @@ function bashGitHubWrite(input: ToolInput): GitHubWrite | undefined {
   return undefined;
 }
 
-function resolvedPolicy(policy: GuardPolicy = {}): Required<GuardPolicy> {
-  const trustedOwners = Array.isArray(policy.trustedOwners)
-    ? policy.trustedOwners.filter((owner): owner is string => typeof owner === "string").map((owner) => owner.toLowerCase())
-    : [];
-  return {
-    trustedOwners,
-    allowOwnedIssueCreation:
-      typeof policy.allowOwnedIssueCreation === "boolean"
-        ? policy.allowOwnedIssueCreation
-        : DEFAULT_POLICY.allowOwnedIssueCreation,
-    blockExternalPullRequests:
-      typeof policy.blockExternalPullRequests === "boolean"
-        ? policy.blockExternalPullRequests
-        : DEFAULT_POLICY.blockExternalPullRequests,
-  };
+function normalizedCreationPolicies(value: unknown): Record<string, CreationPolicy> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([target, mode]) => {
+      const repository = normalizeRepository(target);
+      return repository && (mode === "allow" || mode === "confirm") ? [[repository, mode]] : [];
+    }),
+  );
 }
 
-function isTrustedOwner(target: string | undefined, policy: Required<GuardPolicy>): boolean {
-  return Boolean(target && policy.trustedOwners.includes(target.split("/", 1)[0]!));
+function resolvedPolicy(policy: GuardPolicy = {}): Required<GuardPolicy> {
+  return {
+    issueCreationPolicies: normalizedCreationPolicies(policy.issueCreationPolicies),
+    pullRequestCreationPolicies: normalizedCreationPolicies(policy.pullRequestCreationPolicies),
+  };
 }
 
 export type GuardDecision =
@@ -219,18 +215,13 @@ export function guardDecision(
     confirmationKey,
     unresolvedTarget: write.requiresExplicitTarget ? true : undefined,
   });
-  const blocks = (reason: string): GuardDecision => ({ allow: false, action: write.action, target, reason });
 
-  if (write.operation === "issue_create" && target && isTrustedOwner(target, configuredPolicy)) {
-    return configuredPolicy.allowOwnedIssueCreation ? { allow: true } : needsConfirmation("owned issue creation requires confirmation");
-  }
-  if (write.operation === "pr_create" && target) {
-    if (isTrustedOwner(target, configuredPolicy)) {
-      return needsConfirmation("pull-request creation requires target-specific authorization");
-    }
-    if (configuredPolicy.blockExternalPullRequests) {
-      return blocks("pull-request creation outside the trusted owners is denied");
-    }
+  if (write.operation && target) {
+    const mode =
+      write.operation === "issue_create"
+        ? configuredPolicy.issueCreationPolicies[target]
+        : configuredPolicy.pullRequestCreationPolicies[target];
+    return mode === "allow" ? { allow: true } : needsConfirmation("the creation policy requires confirmation");
   }
 
   if (!currentRepository) return needsConfirmation("the current checkout has no resolvable origin repository");
@@ -256,17 +247,16 @@ function confirmationPrompt(
 ): string {
   const target = decision.target ?? "an unresolved target";
   const unresolvedTarget = decision.unresolvedTarget === true || decision.target === undefined;
+  const current = currentRepository ?? "an unresolved project";
   const writesElsewhere = !unresolvedTarget && decision.target !== currentRepository;
   const location = unresolvedTarget
-    ? `${decision.action} names a GitHub target that could not be resolved.`
-    : writesElsewhere
-      ? `${decision.action} will write a GitHub artifact to ${target}, not the current checkout ${currentRepository ?? "repository"}.`
-      : `${decision.action} will write a GitHub artifact to the current checkout ${target}.`;
+    ? `You are in ${current}. ${decision.action} has no resolvable GitHub target.`
+    : `You are in ${current}. ${decision.action} will create a GitHub artifact in ${target}.`;
   const purpose = unresolvedTarget
-    ? "Approval is required because the target cannot be proven to be the current checkout."
+    ? "Choose an option because the target cannot be proven to be this project."
     : writesElsewhere
-      ? "Approval prevents accidental writes to an unrelated repository."
-      : "Approval confirms that this target-specific write is intentional.";
+      ? "Choose an option because this is a different project."
+      : "Choose an option because this is this project.";
   const remembered = decision.confirmationKey
     ? " Approval is remembered for this action and target for the rest of this session."
     : "";
@@ -288,18 +278,48 @@ export function currentCheckoutRepository(cwd: string): string | undefined {
   }
 }
 
+function readObject(path: string): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function pluginPolicy(path: string): GuardPolicy {
+  const settings = readObject(path)?.settings;
+  if (typeof settings !== "object" || settings === null || Array.isArray(settings)) return {};
+  const pluginSettings = (settings as Record<string, unknown>)["omp-github-write-guard"];
+  if (typeof pluginSettings !== "object" || pluginSettings === null || Array.isArray(pluginSettings)) return {};
+
+  const parse = (value: unknown): Record<string, CreationPolicy> =>
+    normalizedCreationPolicies(typeof value === "string" ? (() => {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return {};
+      }
+    })() : value);
+  const values = pluginSettings as Record<string, unknown>;
+  return {
+    ...(Object.hasOwn(values, "issueCreationPolicies") && { issueCreationPolicies: parse(values.issueCreationPolicies) }),
+    ...(Object.hasOwn(values, "pullRequestCreationPolicies") && {
+      pullRequestCreationPolicies: parse(values.pullRequestCreationPolicies),
+    }),
+  };
+}
+
 export function loadPolicy(
   path = process.env.OMP_GITHUB_WRITE_GUARD_CONFIG,
   homeDirectory = homedir(),
+  pluginSettingsPath = join(homeDirectory, ".omp", "plugins", "omp-plugins.lock.json"),
 ): GuardPolicy {
   const policyPath = path === undefined ? join(homeDirectory, ".omp", "agent", "github-write-guard.json") : path;
-  if (!policyPath) return DEFAULT_POLICY;
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(policyPath, "utf8"));
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as GuardPolicy) : DEFAULT_POLICY;
-  } catch {
-    return DEFAULT_POLICY;
-  }
+  const localPolicy = policyPath ? readObject(policyPath) : undefined;
+  return { ...localPolicy, ...pluginPolicy(pluginSettingsPath) };
 }
 
 export function createGitHubWriteGuard(policy: GuardPolicy = {}): (pi: ExtensionAPI) => void {
@@ -331,7 +351,7 @@ export function createGitHubWriteGuard(policy: GuardPolicy = {}): (pi: Extension
       if (decision.confirmationKey && approvedConfirmations.has(decision.confirmationKey)) return;
 
       const prompt = confirmationPrompt(decision, currentRepository);
-      const confirmed = ctx.hasUI && (await ctx.ui.confirm("Confirm GitHub write", prompt));
+      const confirmed = ctx.hasUI && (await ctx.ui.confirm("Choose GitHub write action", prompt));
       if (confirmed) {
         if (decision.confirmationKey) approvedConfirmations.add(decision.confirmationKey);
         return;
