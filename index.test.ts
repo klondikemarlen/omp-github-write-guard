@@ -23,9 +23,9 @@ function githubOperation(op: string, repo: string) {
   return { path: "xd://github", content: JSON.stringify({ op, repo }) };
 }
 
-function hookHandler() {
+function hookHandler(guardPolicy = policy) {
   let handler: ToolCallHandler | undefined;
-  createGitHubWriteGuard(policy)({
+  createGitHubWriteGuard(guardPolicy)({
     on: (_event, registered) => {
       handler = registered;
     },
@@ -132,15 +132,17 @@ test("requires confirmation before a force-with-lease push to another repository
   ).toMatchObject({ allow: false, requiresConfirmation: true, target: external });
 });
 
-test("shows the compact operation-and-target confirmation", async () => {
+test("explains target-specific confirmations", async () => {
   let prompt = "";
+  let title = "";
   const result = await hookHandler()(
     { toolName: "bash", input: { command: `gh pr create --repo ${owned}` } },
     {
       cwd: process.cwd(),
       hasUI: true,
       ui: {
-        confirm: (_title, message) => {
+        confirm: (receivedTitle, message) => {
+          title = receivedTitle;
           prompt = message;
           return true;
         },
@@ -150,8 +152,74 @@ test("shows the compact operation-and-target confirmation", async () => {
 
   expect(result).toBeUndefined();
   expect(prompt).toBe(
-    `Allow Create pull request targeting ${owned}? pull-request creation requires target-specific authorization.`,
+    `Create pull request will write a GitHub artifact to ${owned}, not the current checkout ${current}. ` +
+      "Approval prevents accidental writes to an unrelated repository. " +
+      "Approval is remembered for this action and target for the rest of this session. " +
+      "pull-request creation requires target-specific authorization.",
   );
+  expect(title).toBe("Confirm GitHub write");
+});
+
+test("remembers only confirmed resolved creation requests", async () => {
+  let confirmations = 0;
+  const handler = hookHandler();
+  const context = {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      confirm: () => ++confirmations > 1,
+    },
+  };
+
+  expect(await handler({ toolName: "bash", input: { command: `gh pr create --repo ${owned}` } }, context)).toMatchObject({
+    block: true,
+  });
+  expect(await handler({ toolName: "bash", input: { command: `gh pr create --repo ${owned}` } }, context)).toBeUndefined();
+  expect(await handler({ toolName: "bash", input: { command: `gh pr create --repo ${owned}` } }, context)).toBeUndefined();
+  expect(await handler({ toolName: "bash", input: { command: `gh issue close 1 --repo ${owned}` } }, context)).toBeUndefined();
+  expect(await handler({ toolName: "bash", input: { command: `gh issue close 1 --repo ${owned}` } }, context)).toBeUndefined();
+
+  expect(confirmations).toBe(4);
+});
+
+test("remembers resolved current-checkout creation requests", async () => {
+  let confirmations = 0;
+  const handler = hookHandler({ trustedOwners: ["klondikemarlen"] });
+  const context = {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      confirm: () => {
+        confirmations++;
+        return true;
+      },
+    },
+  };
+
+  await handler({ toolName: "bash", input: { command: "gh pr create" } }, context);
+  await handler({ toolName: "bash", input: { command: "gh pr create" } }, context);
+
+  expect(confirmations).toBe(1);
+});
+
+test("does not remember unresolved targets", async () => {
+  let confirmations = 0;
+  const handler = hookHandler();
+  const context = {
+    cwd: "/tmp",
+    hasUI: true,
+    ui: {
+      confirm: () => {
+        confirmations++;
+        return true;
+      },
+    },
+  };
+
+  await handler({ toolName: "bash", input: { command: 'gh pr create --repo ""' } }, context);
+  await handler({ toolName: "bash", input: { command: 'gh pr create --repo ""' } }, context);
+
+  expect(confirmations).toBe(2);
 });
 
 test("blocks denied pull requests without confirmation", async () => {
