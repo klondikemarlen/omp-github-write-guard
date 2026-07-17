@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 
 import {
   createGitHubWriteGuard,
@@ -69,6 +69,37 @@ test("loads explicit local policy files", async () => {
     expect(loadPolicy(path)).toEqual(policy);
   } finally {
     rmSync(path);
+  }
+});
+
+test("loads the stable local policy path when no environment override exists", async () => {
+  const homeDirectory = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const path = `${homeDirectory}/.omp/agent/github-write-guard.json`;
+  const override = process.env.OMP_GITHUB_WRITE_GUARD_CONFIG;
+  mkdirSync(`${homeDirectory}/.omp/agent`, { recursive: true });
+  await Bun.write(path, JSON.stringify(policy));
+  delete process.env.OMP_GITHUB_WRITE_GUARD_CONFIG;
+  try {
+    expect(loadPolicy(undefined, homeDirectory)).toEqual(policy);
+  } finally {
+    if (override === undefined) delete process.env.OMP_GITHUB_WRITE_GUARD_CONFIG;
+    else process.env.OMP_GITHUB_WRITE_GUARD_CONFIG = override;
+    rmSync(homeDirectory, { recursive: true });
+  }
+});
+
+test("prefers an explicit policy path over the stable local path", async () => {
+  const homeDirectory = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const stablePath = `${homeDirectory}/.omp/agent/github-write-guard.json`;
+  const explicitPath = `${homeDirectory}/override.json`;
+  const explicitPolicy = { trustedOwners: ["override"] };
+  mkdirSync(`${homeDirectory}/.omp/agent`, { recursive: true });
+  await Bun.write(stablePath, JSON.stringify(policy));
+  await Bun.write(explicitPath, JSON.stringify(explicitPolicy));
+  try {
+    expect(loadPolicy(explicitPath, homeDirectory)).toEqual(explicitPolicy);
+  } finally {
+    rmSync(homeDirectory, { recursive: true });
   }
 });
 

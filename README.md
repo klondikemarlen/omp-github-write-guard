@@ -21,7 +21,7 @@ The package root declares `index.ts` in `package.json` under `omp.extensions` fo
 
 ## Configure
 
-Policy is non-secret JSON. Point `OMP_GITHUB_WRITE_GUARD_CONFIG` at a local file; set a different path for each OMP profile when policies differ.
+Policy is non-secret JSON. By default the plugin reads `~/.omp/agent/github-write-guard.json`; `OMP_GITHUB_WRITE_GUARD_CONFIG` overrides that path for a profile-specific policy.
 
 ```json
 {
