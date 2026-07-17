@@ -52,3 +52,17 @@ Keep any existing local guard enabled until this extension is installed and its 
 ```bash
 bun test
 ```
+
+## Release
+
+Before releasing:
+
+```bash
+bun run release:check
+```
+
+After `main` is pushed:
+
+```bash
+bun run reinstall
+```
