@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 
 import {
   createGitHubWriteGuard,
@@ -69,6 +69,18 @@ test("loads explicit local policy files", async () => {
     expect(loadPolicy(path)).toEqual(policy);
   } finally {
     rmSync(path);
+  }
+});
+
+test("loads the stable local policy path when no environment override exists", async () => {
+  const homeDirectory = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const path = `${homeDirectory}/.omp/agent/github-write-guard.json`;
+  mkdirSync(`${homeDirectory}/.omp/agent`, { recursive: true });
+  await Bun.write(path, JSON.stringify(policy));
+  try {
+    expect(loadPolicy(undefined, homeDirectory)).toEqual(policy);
+  } finally {
+    rmSync(homeDirectory, { recursive: true });
   }
 });
 
