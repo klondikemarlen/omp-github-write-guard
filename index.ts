@@ -59,6 +59,14 @@ function hasRepositoryOption(command: string): boolean {
   return /(?:--repo|-R)(?:=|\s+)/.test(command);
 }
 
+const GIT_PUSH_COMMAND = /(?:^|&&|\|\||;|\||\n)\s*git\s+push\b/;
+
+function gitPushRemote(command: string): string | undefined {
+  return command.match(
+    /(?:^|&&|\|\||;|\||\n)\s*git\s+push(?:\s+(?:-u|--set-upstream|--force-with-lease(?:=\S+)?|--force|--tags|--all|--mirror|--dry-run|--atomic))*\s+([^\s-][^\s]*)/,
+  )?.[1];
+}
+
 function githubDeviceWrite(input: ToolInput): GitHubWrite | undefined {
   if (input.path !== "xd://github" || typeof input.content !== "string") return undefined;
 
@@ -138,10 +146,8 @@ function bashGitHubWrite(input: ToolInput): GitHubWrite | undefined {
       requiresExplicitTarget: hasRepositoryOption(command) && !target,
     };
   }
-  if (/\bgit\s+push\b/.test(command)) {
-    const remote = command.match(
-      /\bgit\s+push(?:\s+(?:-u|--set-upstream|--force-with-lease(?:=\S+)?|--force|--tags|--all|--mirror|--dry-run))*\s+([^\s-][^\s]*)/,
-    )?.[1];
+  if (GIT_PUSH_COMMAND.test(command)) {
+    const remote = gitPushRemote(command);
     const remoteTarget = normalizeRepository(remote);
     return {
       action: "git push",
@@ -168,11 +174,12 @@ export function guardDecision(
   input: ToolInput,
   currentRepository?: string,
   defaultRepository = currentRepository,
+  resolvedPushTarget?: string,
 ): GuardDecision {
   const write = githubDeviceWrite(input) ?? bashGitHubWrite(input);
   if (!write) return { allow: true };
 
-  const target = write.requiresExplicitTarget ? write.target : write.target ?? defaultRepository;
+  const target = write.requiresExplicitTarget ? write.target ?? resolvedPushTarget : write.target ?? defaultRepository;
   const blocked = (reason: string): GuardDecision => ({
     allow: false,
     action: write.action,
@@ -181,10 +188,13 @@ export function guardDecision(
   });
 
   if (!currentRepository) {
-    return blocked("the current checkout has no resolvable GitHub origin repository");
+    return {
+      ...blocked("the current checkout has no resolvable GitHub origin repository"),
+      requiresConfirmation: true,
+    };
   }
-  if (write.requiresExplicitTarget || !target) {
-    return blocked("the GitHub target cannot be resolved");
+  if (!target) {
+    return { ...blocked("the GitHub target cannot be resolved"), requiresConfirmation: true };
   }
   if (target === currentRepository) return { allow: true };
 
@@ -192,10 +202,10 @@ export function guardDecision(
 }
 
 
-export function currentCheckoutRepository(cwd: string): string | undefined {
+function gitRemoteRepository(cwd: string, remote: string, push = false): string | undefined {
   try {
     return normalizeRepository(
-      execFileSync("git", ["-C", cwd, "remote", "get-url", "origin"], {
+      execFileSync("git", ["-C", cwd, "remote", "get-url", ...(push ? ["--push"] : []), remote], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       }),
@@ -203,6 +213,10 @@ export function currentCheckoutRepository(cwd: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function currentCheckoutRepository(cwd: string): string | undefined {
+  return gitRemoteRepository(cwd, "origin");
 }
 
 
@@ -218,8 +232,17 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
           : event.input;
       const defaultCwd =
         event.toolName === "bash" && typeof event.input.cwd === "string" ? event.input.cwd : ctx.cwd;
+      const pushRemote =
+        event.toolName === "bash" &&
+        typeof event.input.command === "string" &&
+        GIT_PUSH_COMMAND.test(event.input.command)
+          ? gitPushRemote(event.input.command)
+          : undefined;
       const currentRepository = currentCheckoutRepository(ctx.cwd);
-      const decision = guardDecision(input, currentRepository, currentCheckoutRepository(defaultCwd));
+      const resolvedPushTarget =
+        pushRemote && !normalizeRepository(pushRemote) ? gitRemoteRepository(defaultCwd, pushRemote, true) : undefined;
+      const defaultRepository = resolvedPushTarget ?? currentCheckoutRepository(defaultCwd);
+      const decision = guardDecision(input, currentRepository, defaultRepository, resolvedPushTarget);
       if (decision.allow) return;
 
       const target = decision.target ?? "an unresolved target";
@@ -230,7 +253,7 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
         return { block: true, reason: `${reason} Explicit confirmation is required for this operation and target.` };
       }
 
-      const confirmationKey = `${decision.action}\0${decision.target}`;
+      const confirmationKey = `${decision.action}\0${target}`;
       if (pendingConfirmations.has(confirmationKey)) {
         return { block: true, reason: `${reason} An identical confirmation is already pending.` };
       }
@@ -240,7 +263,7 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
         if (
           await ctx.ui.confirm(
             "Choose GitHub write action",
-            `You are in ${currentRepository}. ${decision.action} will write to ${decision.target}. ` +
+            `You are in ${currentRepository ?? "an unresolved session checkout"}. ${decision.action} will write to ${target}. ` +
               "Choose an option because this is a different project.",
           )
         ) {

@@ -39,6 +39,21 @@ test("allows writes to the current repository", () => {
   expect(guardDecision({ command: "git push origin" }, current)).toEqual({ allow: true });
 });
 
+test("does not treat quoted git push text as a write", async () => {
+  const result = await hookHandler()(
+    { toolName: "bash", input: { command: 'git commit -m "mention git push"' } },
+    { cwd: process.cwd(), hasUI: true, ui: { confirm: () => true } },
+  );
+
+  expect(result).toBeUndefined();
+});
+
+test("recognizes leading-whitespace git push commands", () => {
+  expect(
+    guardDecision({ command: ` git push git@github.com:${external}.git HEAD` }, current),
+  ).toMatchObject({ target: external, requiresConfirmation: true });
+});
+
 test("does not prompt writes to the current repository", async () => {
   let confirmations = 0;
   const result = await hookHandler()(
@@ -82,19 +97,68 @@ test("uses the command working directory as the default target", () => {
   });
 });
 
-test("blocks writes with an unresolved checkout or target", () => {
+test("requires confirmation for unresolved checkouts or targets", () => {
   expect(guardDecision({ command: "gh issue create" })).toMatchObject({
     allow: false,
     reason: "the current checkout has no resolvable GitHub origin repository",
+    requiresConfirmation: true,
   });
   expect(guardDecision({ command: 'gh pr create --repo ""' }, current)).toMatchObject({
     allow: false,
     reason: "the GitHub target cannot be resolved",
+    requiresConfirmation: true,
   });
   expect(guardDecision(githubOperation("repo_fork", current), current)).toMatchObject({
     allow: false,
     reason: "the GitHub target cannot be resolved",
+    requiresConfirmation: true,
   });
+});
+
+test("resolves named push remotes with atomic pushes", async () => {
+  const repository = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  mkdirSync(repository, { recursive: true });
+  try {
+    execFileSync("git", ["init", repository]);
+    execFileSync("git", ["-C", repository, "remote", "add", "origin", `git@github.com:${current}.git`]);
+    execFileSync("git", ["-C", repository, "remote", "add", "upstream", `git@github.com:${current}.git`]);
+    execFileSync("git", ["-C", repository, "remote", "set-url", "--push", "upstream", `git@github.com:${external}.git`]);
+    let prompt = "";
+
+    expect(
+      await hookHandler()(
+        { toolName: "bash", input: { command: "git push --atomic upstream", cwd: repository } },
+        {
+          cwd: repository,
+          hasUI: true,
+          ui: { confirm: (_title, message) => ((prompt = message), true) },
+        },
+      ),
+    ).toBeUndefined();
+    expect(prompt).toContain(`git push will write to ${external}`);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("describes unresolved source or target in confirmations", async () => {
+  const prompts: string[] = [];
+  const handler = hookHandler();
+  const context = {
+    cwd: `/tmp/omp-github-write-guard-${crypto.randomUUID()}`,
+    hasUI: true,
+    ui: {
+      confirm: (_title: string, message: string) => {
+        prompts.push(message);
+        return true;
+      },
+    },
+  };
+
+  expect(await handler({ toolName: "github", input: { op: "issue_create", repo: external } }, context)).toBeUndefined();
+  expect(prompts[0]).toContain("an unresolved session checkout");
+  expect(await handler({ toolName: "github", input: { op: "repo_fork" } }, { ...context, cwd: process.cwd() })).toBeUndefined();
+  expect(prompts[1]).toContain("an unresolved target");
 });
 
 test("confirms every external write individually", async () => {
@@ -123,7 +187,7 @@ test("confirms every external write individually", async () => {
   );
 });
 
-test("blocks duplicate external writes while a confirmation is pending", async () => {
+test("blocks duplicate uncertain writes while a confirmation is pending", async () => {
   let confirmations = 0;
   let resolveConfirmation!: (confirmed: boolean) => void;
   const handler = hookHandler();
@@ -139,7 +203,7 @@ test("blocks duplicate external writes while a confirmation is pending", async (
       },
     },
   };
-  const event = { toolName: "github" as const, input: { op: "issue_create", repo: external } };
+  const event = { toolName: "github" as const, input: { op: "repo_fork" } };
 
   const first = handler(event, context);
   const retry = await handler(event, context);
@@ -156,7 +220,7 @@ test("blocks duplicate external writes while a confirmation is pending", async (
 
 test("clears pending confirmations after rejection or failure", async () => {
   const handler = hookHandler();
-  const event = { toolName: "github" as const, input: { op: "issue_create", repo: external } };
+  const event = { toolName: "github" as const, input: { op: "repo_fork" } };
   let confirmations = 0;
   let failConfirmation = false;
   const context = {

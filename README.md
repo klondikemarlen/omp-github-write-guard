@@ -2,7 +2,7 @@
 
 Opt-in OMP extension that protects GitHub writes outside the current checkout.
 
-It resolves the current GitHub project from the checkout's `origin` remote. Writes to that project proceed. A resolved external target requires an OMP confirmation for that single write; approvals are never remembered. A write with an unresolved checkout or target is blocked.
+It resolves the current GitHub project from the checkout's `origin` remote. Writes to that project proceed. A resolved external target requires an OMP confirmation for that single write; approvals are never remembered. An unresolved checkout or target also requires an explicit one-off confirmation rather than being guessed. Named `git push` remotes are resolved from the command working directory before that fallback.
 
 There are no settings or policies.
 
