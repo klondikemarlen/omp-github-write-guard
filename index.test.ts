@@ -100,45 +100,6 @@ test("prefers an explicit policy path over the stable local path", async () => {
     rmSync(homeDirectory, { recursive: true });
   }
 });
-test("prefers plugin UI settings over local policy and fails closed for malformed UI values", async () => {
-  const homeDirectory = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
-  const stablePath = `${homeDirectory}/.omp/agent/github-write-guard.json`;
-  const pluginSettingsPath = `${homeDirectory}/.omp/plugins/omp-plugins.lock.json`;
-  mkdirSync(`${homeDirectory}/.omp/agent`, { recursive: true });
-  mkdirSync(`${homeDirectory}/.omp/plugins`, { recursive: true });
-  await Bun.write(
-    stablePath,
-    JSON.stringify({
-      issueCreationPolicies: { [owned]: "allow" },
-      pullRequestCreationPolicies: { [external]: "allow" },
-    }),
-  );
-  await Bun.write(
-    pluginSettingsPath,
-    JSON.stringify({
-      settings: {
-        "omp-github-write-guard": { issueCreationPolicies: JSON.stringify({ [owned]: "confirm" }) },
-      },
-    }),
-  );
-  try {
-    expect(loadPolicy(stablePath, homeDirectory, pluginSettingsPath)).toEqual({
-      issueCreationPolicies: { [owned]: "confirm" },
-      pullRequestCreationPolicies: { [external]: "allow" },
-    });
-
-    await Bun.write(
-      pluginSettingsPath,
-      JSON.stringify({ settings: { "omp-github-write-guard": { issueCreationPolicies: "not JSON" } } }),
-    );
-    expect(guardDecision({ command: `gh issue create --repo ${owned}` }, loadPolicy(stablePath, homeDirectory, pluginSettingsPath), current)).toMatchObject({
-      allow: false,
-      requiresConfirmation: true,
-    });
-  } finally {
-    rmSync(homeDirectory, { recursive: true });
-  }
-});
 
 test("applies independent issue and pull-request creation policies", () => {
   expect(guardDecision({ command: `gh issue create --repo ${owned}` }, policy, current)).toEqual({ allow: true });

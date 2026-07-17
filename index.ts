@@ -304,37 +304,13 @@ function readObject(path: string): Record<string, unknown> | undefined {
   }
 }
 
-function pluginPolicy(path: string): GuardPolicy {
-  const settings = readObject(path)?.settings;
-  if (typeof settings !== "object" || settings === null || Array.isArray(settings)) return {};
-  const pluginSettings = (settings as Record<string, unknown>)["omp-github-write-guard"];
-  if (typeof pluginSettings !== "object" || pluginSettings === null || Array.isArray(pluginSettings)) return {};
-
-  const parse = (value: unknown): Record<string, CreationPolicy> =>
-    normalizedCreationPolicies(typeof value === "string" ? (() => {
-      try {
-        return JSON.parse(value);
-      } catch {
-        return {};
-      }
-    })() : value);
-  const values = pluginSettings as Record<string, unknown>;
-  return {
-    ...(Object.hasOwn(values, "issueCreationPolicies") && { issueCreationPolicies: parse(values.issueCreationPolicies) }),
-    ...(Object.hasOwn(values, "pullRequestCreationPolicies") && {
-      pullRequestCreationPolicies: parse(values.pullRequestCreationPolicies),
-    }),
-  };
-}
 
 export function loadPolicy(
   path = process.env.OMP_GITHUB_WRITE_GUARD_CONFIG,
   homeDirectory = homedir(),
-  pluginSettingsPath = join(homeDirectory, ".omp", "plugins", "omp-plugins.lock.json"),
 ): GuardPolicy {
   const policyPath = path === undefined ? join(homeDirectory, ".omp", "agent", "github-write-guard.json") : path;
-  const localPolicy = policyPath ? readObject(policyPath) : undefined;
-  return { ...localPolicy, ...pluginPolicy(pluginSettingsPath) };
+  return policyPath ? readObject(policyPath) ?? {} : {};
 }
 
 export function createGitHubWriteGuard(policy: GuardPolicy = {}): (pi: ExtensionAPI) => void {
