@@ -1,16 +1,23 @@
-# OMP GitHub Write Guard
+# OMP Git Push Authorization Guard
 
-Opt-in OMP extension that protects GitHub writes outside the current checkout.
+Opt-in OMP extension that authorizes `git push` only to the GitHub repository of the current checkout.
 
-It resolves the current GitHub project from the checkout's `origin` remote. Writes to that project proceed. A resolved external target requires an OMP confirmation for that single write; approvals are never remembered. An unresolved checkout or target also requires an explicit one-off confirmation rather than being guessed. Named `git push` remotes are resolved from the command working directory before that fallback.
+## Authorization rule
 
-There are no settings or policies.
+The extension observes executable `git push` commands sent through OMP's `bash` tool.
 
-## Confirmation deadline
+- A push is allowed only when its resolved GitHub target matches the session checkout's `origin`.
+- An external or unresolved target, or an unresolved session checkout, is hard-blocked.
+- There is no confirmation UI, timeout, remembered approval, allowlist, or override.
 
-OMP 17.0.2 ends extension handlers after 30 seconds. The guard cannot extend that host deadline, so a confirmation left open beyond it cannot authorize the original write. While that menu remains open, identical retries are blocked without opening another menu; resolve it, then retry to receive a fresh one-off choice. Host support for a confirmation that survives its handler deadline is required to remove this limitation.
+To push another repository, start OMP from that repository's checkout.
+
+The extension does not inspect `github`, `write`, `gh`, `curl`, or other tools. In particular, it does not intercept OMP Learner's structured GitHub writes.
+
+Named Git remotes are resolved from the command working directory using their push URL. Git worktrees use their shared checkout origin.
 
 ## Install
+
 Install the public Git repository:
 
 ```bash
@@ -24,8 +31,6 @@ omp --extension .
 ```
 
 The package root declares `index.ts` in `package.json` under `omp.extensions` for packaged installation.
-
-
 
 ## Development
 
