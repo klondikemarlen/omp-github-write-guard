@@ -119,10 +119,21 @@ function bashGitHubWrite(input: ToolInput): GitHubWrite | undefined {
       /\s(?:-f|--field|--raw-field|--input)(?:\s+|=)/.test(command));
 
   if (/\bgh\s+issue\s+create\b/.test(command)) {
-    return { action: "Create GitHub issue", operation: "issue_create", target };
+    return {
+      action: "Create GitHub issue",
+      operation: "issue_create",
+      target,
+      requiresExplicitTarget: hasRepositoryOption(command) && !target,
+    };
   }
   if (/\bgh\s+pr\s+create\b/.test(command)) {
-    return { action: "Create pull request", operation: "pr_create", target, resource };
+    return {
+      action: "Create pull request",
+      operation: "pr_create",
+      target,
+      resource,
+      requiresExplicitTarget: hasRepositoryOption(command) && !target,
+    };
   }
   if (apiWrite && /\brepos\/[^/\s]+\/[^/\s?#]+\/issues(?:[?\s]|$)/i.test(command)) {
     return { action: "Create GitHub issue", operation: "issue_create", target };
@@ -215,6 +226,8 @@ export function guardDecision(
     confirmationKey,
     unresolvedTarget: write.requiresExplicitTarget ? true : undefined,
   });
+
+  if (write.operation && target === currentRepository && !write.requiresExplicitTarget) return { allow: true };
 
   if (write.operation && target) {
     const mode =
