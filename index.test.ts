@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
 
 import {
@@ -14,9 +15,8 @@ const current = "klondikemarlen/omp-github-write-guard";
 const owned = "acme/example";
 const external = "elsewhere/example";
 const policy: GuardPolicy = {
-  trustedOwners: ["acme"],
-  allowOwnedIssueCreation: true,
-  blockExternalPullRequests: true,
+  issueCreationPolicies: { [owned]: "allow" },
+  pullRequestCreationPolicies: {},
 };
 
 function githubOperation(op: string, repo: string) {
@@ -51,9 +51,7 @@ test("defaults to confirmation without a trusted owner", () => {
 });
 
 test("fails closed for malformed local policy values", () => {
-  const malformed = JSON.parse(
-    '{"trustedOwners":["acme",42],"allowOwnedIssueCreation":"yes","blockExternalPullRequests":"yes"}',
-  ) as GuardPolicy;
+  const malformed = JSON.parse('{"issueCreationPolicies":{"acme/example":"ask"}}') as GuardPolicy;
 
   expect(guardDecision({ command: `gh issue create --repo ${owned}` }, malformed, current)).toMatchObject({
     allow: false,
@@ -92,7 +90,7 @@ test("prefers an explicit policy path over the stable local path", async () => {
   const homeDirectory = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
   const stablePath = `${homeDirectory}/.omp/agent/github-write-guard.json`;
   const explicitPath = `${homeDirectory}/override.json`;
-  const explicitPolicy = { trustedOwners: ["override"] };
+  const explicitPolicy = { issueCreationPolicies: { "override/example": "allow" } };
   mkdirSync(`${homeDirectory}/.omp/agent`, { recursive: true });
   await Bun.write(stablePath, JSON.stringify(policy));
   await Bun.write(explicitPath, JSON.stringify(explicitPolicy));
@@ -102,46 +100,80 @@ test("prefers an explicit policy path over the stable local path", async () => {
     rmSync(homeDirectory, { recursive: true });
   }
 });
+test("prefers plugin UI settings over local policy and fails closed for malformed UI values", async () => {
+  const homeDirectory = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const stablePath = `${homeDirectory}/.omp/agent/github-write-guard.json`;
+  const pluginSettingsPath = `${homeDirectory}/.omp/plugins/omp-plugins.lock.json`;
+  mkdirSync(`${homeDirectory}/.omp/agent`, { recursive: true });
+  mkdirSync(`${homeDirectory}/.omp/plugins`, { recursive: true });
+  await Bun.write(
+    stablePath,
+    JSON.stringify({
+      issueCreationPolicies: { [owned]: "allow" },
+      pullRequestCreationPolicies: { [external]: "allow" },
+    }),
+  );
+  await Bun.write(
+    pluginSettingsPath,
+    JSON.stringify({
+      settings: {
+        "omp-github-write-guard": { issueCreationPolicies: JSON.stringify({ [owned]: "confirm" }) },
+      },
+    }),
+  );
+  try {
+    expect(loadPolicy(stablePath, homeDirectory, pluginSettingsPath)).toEqual({
+      issueCreationPolicies: { [owned]: "confirm" },
+      pullRequestCreationPolicies: { [external]: "allow" },
+    });
 
-test("applies the configured ownership and creation matrix to CLI commands", () => {
-  expect(guardDecision({ command: `gh issue create --repo ${owned}` }, policy, current)).toEqual({
-    allow: true,
-  });
+    await Bun.write(
+      pluginSettingsPath,
+      JSON.stringify({ settings: { "omp-github-write-guard": { issueCreationPolicies: "not JSON" } } }),
+    );
+    expect(guardDecision({ command: `gh issue create --repo ${owned}` }, loadPolicy(stablePath, homeDirectory, pluginSettingsPath), current)).toMatchObject({
+      allow: false,
+      requiresConfirmation: true,
+    });
+  } finally {
+    rmSync(homeDirectory, { recursive: true });
+  }
+});
+
+test("applies independent issue and pull-request creation policies", () => {
+  expect(guardDecision({ command: `gh issue create --repo ${owned}` }, policy, current)).toEqual({ allow: true });
   expect(guardDecision({ command: `gh pr create --repo ${owned}` }, policy, current)).toMatchObject({
     allow: false,
-    action: "Create pull request",
     requiresConfirmation: true,
     target: owned,
   });
   expect(guardDecision({ command: `gh issue create --repo ${external}` }, policy, current)).toMatchObject({
     allow: false,
-    action: "Create GitHub issue",
     requiresConfirmation: true,
     target: external,
   });
   expect(guardDecision({ command: `gh pr create --repo ${external}` }, policy, current)).toMatchObject({
     allow: false,
-    action: "Create pull request",
+    requiresConfirmation: true,
     target: external,
+  });
+
+  const pullRequestPolicy = { pullRequestCreationPolicies: { [external]: "allow" } };
+  expect(guardDecision({ command: `gh pr create --repo ${external}` }, pullRequestPolicy, current)).toEqual({
+    allow: true,
   });
 });
 
-test("applies the configured ownership matrix to GitHub-tool operations", () => {
+test("applies the creation policies to GitHub-tool operations", () => {
   expect(guardDecision(githubOperation("issue_create", owned), policy, current)).toEqual({ allow: true });
   expect(guardDecision(githubOperation("pr_create", owned), policy, current)).toMatchObject({
     allow: false,
     requiresConfirmation: true,
     target: owned,
   });
-  expect(guardDecision(githubOperation("issue_create", external), policy, current)).toMatchObject({
-    allow: false,
-    requiresConfirmation: true,
-    target: external,
-  });
-  expect(guardDecision(githubOperation("pr_create", external), policy, current)).toMatchObject({
-    allow: false,
-    target: external,
-  });
+  expect(
+    guardDecision(githubOperation("pr_create", external), { pullRequestCreationPolicies: { [external]: "allow" } }, current),
+  ).toEqual({ allow: true });
 });
 
 test("keeps REST item writes confirmation-gated", () => {
@@ -163,7 +195,7 @@ test("requires confirmation before a force-with-lease push to another repository
   ).toMatchObject({ allow: false, requiresConfirmation: true, target: external });
 });
 
-test("explains target-specific confirmations", async () => {
+test("presents an informative, menu-confirmed creation choice", async () => {
   let prompt = "";
   let title = "";
   const result = await hookHandler()(
@@ -183,12 +215,23 @@ test("explains target-specific confirmations", async () => {
 
   expect(result).toBeUndefined();
   expect(prompt).toBe(
-    `Create pull request will write a GitHub artifact to ${owned}, not the current checkout ${current}. ` +
-      "Approval prevents accidental writes to an unrelated repository. " +
+    `You are in ${current}. Create pull request will create a GitHub artifact in ${owned}. ` +
+      "Choose an option because this is a different project. " +
       "Approval is remembered for this action and target for the rest of this session. " +
-      "pull-request creation requires target-specific authorization.",
+      "the creation policy requires confirmation.",
   );
-  expect(title).toBe("Confirm GitHub write");
+  expect(title).toBe("Choose GitHub write action");
+});
+
+test("identifies same-project creation in the confirmation choice", async () => {
+  let prompt = "";
+  await hookHandler({})(
+    { toolName: "bash", input: { command: "gh issue create" } },
+    { cwd: process.cwd(), hasUI: true, ui: { confirm: (_title, message) => ((prompt = message), true) } },
+  );
+  expect(prompt).toContain(
+    `You are in ${current}. Create GitHub issue will create a GitHub artifact in ${current}. Choose an option because this is this project.`,
+  );
 });
 
 test("remembers only confirmed resolved creation requests", async () => {
@@ -215,7 +258,7 @@ test("remembers only confirmed resolved creation requests", async () => {
 
 test("remembers resolved current-checkout creation requests", async () => {
   let confirmations = 0;
-  const handler = hookHandler({ trustedOwners: ["klondikemarlen"] });
+  const handler = hookHandler();
   const context = {
     cwd: process.cwd(),
     hasUI: true,
@@ -235,7 +278,7 @@ test("remembers resolved current-checkout creation requests", async () => {
 
 test("keeps confirmed creation approvals scoped to action and target", async () => {
   let confirmations = 0;
-  const handler = hookHandler({ trustedOwners: ["acme"] });
+  const handler = hookHandler({});
   const context = {
     cwd: process.cwd(),
     hasUI: true,
@@ -275,7 +318,7 @@ test("does not remember unresolved targets", async () => {
   expect(confirmations).toBe(2);
 });
 
-test("blocks denied pull requests without confirmation", async () => {
+test("prompts instead of hard-blocking pull requests", async () => {
   let confirmations = 0;
   const result = await hookHandler()(
     { toolName: "github", input: { op: "pr_create", repo: external } },
@@ -291,6 +334,32 @@ test("blocks denied pull requests without confirmation", async () => {
     },
   );
 
-  expect(result).toMatchObject({ block: true, reason: expect.stringContaining(`targeting ${external}`) });
-  expect(confirmations).toBe(0);
+  expect(result).toBeUndefined();
+  expect(confirmations).toBe(1);
+});
+
+test("treats a git worktree as its origin repository", async () => {
+  const repository = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const worktree = `${repository}-worktree`;
+  mkdirSync(repository, { recursive: true });
+  try {
+    execFileSync("git", ["init", repository]);
+    execFileSync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+    execFileSync("git", ["-C", repository, "config", "user.name", "Test"]);
+    execFileSync("git", ["-C", repository, "remote", "add", "origin", "git@github.com:acme/example.git"]);
+    execFileSync("git", ["-C", repository, "commit", "--allow-empty", "-m", "initial"]);
+    execFileSync("git", ["-C", repository, "worktree", "add", worktree, "-b", "feature"]);
+
+    expect(currentCheckoutRepository(worktree)).toBe(owned);
+    let confirmations = 0;
+    const result = await hookHandler({ pullRequestCreationPolicies: { [owned]: "allow" } })(
+      { toolName: "bash", input: { command: "gh pr create", cwd: worktree } },
+      { cwd: worktree, hasUI: true, ui: { confirm: () => ++confirmations > 0 } },
+    );
+    expect(result).toBeUndefined();
+    expect(confirmations).toBe(0);
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(repository, { recursive: true, force: true });
+  }
 });
