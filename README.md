@@ -14,7 +14,7 @@ To push another repository, start OMP from that repository's checkout.
 
 The extension does not inspect `github`, `write`, `gh`, `curl`, or other tools. In particular, it does not intercept OMP Learner's structured GitHub writes.
 
-Named Git remotes are resolved from the command working directory using their push URL. Git worktrees use their shared checkout origin.
+Named Git remotes are resolved from the command working directory or a `git -C` checkout using their push URL. Git worktrees use their shared checkout origin.
 
 ## Install
 
