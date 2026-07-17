@@ -84,6 +84,21 @@ test("loads the stable local policy path when no environment override exists", a
   }
 });
 
+test("prefers an explicit policy path over the stable local path", async () => {
+  const homeDirectory = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const stablePath = `${homeDirectory}/.omp/agent/github-write-guard.json`;
+  const explicitPath = `${homeDirectory}/override.json`;
+  const explicitPolicy = { trustedOwners: ["override"] };
+  mkdirSync(`${homeDirectory}/.omp/agent`, { recursive: true });
+  await Bun.write(stablePath, JSON.stringify(policy));
+  await Bun.write(explicitPath, JSON.stringify(explicitPolicy));
+  try {
+    expect(loadPolicy(explicitPath, homeDirectory)).toEqual(explicitPolicy);
+  } finally {
+    rmSync(homeDirectory, { recursive: true });
+  }
+});
+
 test("applies the configured ownership and creation matrix to CLI commands", () => {
   expect(guardDecision({ command: `gh issue create --repo ${owned}` }, policy, current)).toEqual({
     allow: true,
