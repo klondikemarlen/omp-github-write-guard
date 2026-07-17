@@ -1,0 +1,20 @@
+{
+  "name": "omp-github-write-guard",
+  "version": "0.1.0",
+  "description": "Opt-in OMP guard for GitHub writes outside the current checkout.",
+  "type": "module",
+  "scripts": {
+    "test": "bun test"
+  },
+  "keywords": ["omp-plugin", "github", "safety"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/klondikemarlen/omp-github-write-guard.git"
+  },
+  "omp": {
+    "extensions": ["./index.ts"]
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
