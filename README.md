@@ -34,9 +34,9 @@ Policy is non-secret JSON. By default the plugin reads `~/.omp/agent/github-writ
 }
 ```
 
-Use the same two JSON fields in OMP's plugin settings UI. Plugin UI values override the corresponding local-policy field. Each map uses exact `owner/repository` targets, case-insensitively:
+Creation policies are configured only in that local JSON file; the plugin settings UI deliberately exposes no structured policy maps.
 
-- Current project's resolved target — always create without a confirmation.
+- Current project's resolved target — always create without a confirmation or policy entry.
 - `allow` — create an external target without a confirmation.
 - `confirm`, unlisted, or malformed external entries — show the confirmation choice.
 
