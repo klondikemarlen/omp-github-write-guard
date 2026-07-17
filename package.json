@@ -4,7 +4,9 @@
   "description": "Opt-in OMP guard for GitHub writes outside the current checkout.",
   "type": "module",
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "release:check": "bun test",
+    "reinstall": "omp plugin install github:klondikemarlen/omp-github-write-guard"
   },
   "keywords": ["omp-plugin", "github", "safety"],
   "repository": {
