@@ -5,8 +5,13 @@ Opt-in OMP extension that protects GitHub writes outside the current checkout. I
 It never hard-codes a GitHub owner or repository.
 
 ## Install
+Install the public Git repository:
 
-Run the repository directly during development:
+```bash
+omp plugin install github:klondikemarlen/omp-github-write-guard
+```
+
+For development, run the repository directly:
 
 ```bash
 OMP_GITHUB_WRITE_GUARD_CONFIG="$HOME/.omp/agent/github-write-guard.json" omp --extension .
