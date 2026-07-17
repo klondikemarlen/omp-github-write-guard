@@ -37,10 +37,11 @@ Policy is non-secret JSON. Point `OMP_GITHUB_WRITE_GUARD_CONFIG` at a local file
 - Pull-request creation in a trusted owner always requires a target-specific confirmation.
 - `blockExternalPullRequests` denies PR creation outside trusted owners before execution. Its default is `false`.
 
-Confirmations stay compact and name the action and target:
+Confirmations explain whether the write targets the current checkout, another repository, or an unresolved target. A confirmed issue or pull-request creation is remembered for that exact resolved target for the rest of the OMP session; denied requests, generic writes, unresolved targets, and different action/target pairs prompt again.
 
 ```text
-Allow Create pull request targeting example-org/repository? pull-request creation requires target-specific authorization.
+Create pull request will write a GitHub artifact to example-org/repository, not the current checkout.
+Approval prevents accidental writes to an unrelated repository.
 ```
 
 ## Local Policy Migration
