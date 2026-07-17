@@ -36,9 +36,9 @@ Policy is non-secret JSON. By default the plugin reads `~/.omp/agent/github-writ
 
 Use the same two JSON fields in OMP's plugin settings UI. Plugin UI values override the corresponding local-policy field. Each map uses exact `owner/repository` targets, case-insensitively:
 
-- `allow` — create without a confirmation.
-- `confirm` — show the confirmation choice.
-- Unlisted or malformed entries — show the confirmation choice.
+- Current project's resolved target — always create without a confirmation.
+- `allow` — create an external target without a confirmation.
+- `confirm`, unlisted, or malformed external entries — show the confirmation choice.
 
 No operation is hard-blocked by policy. The confirmation is an OMP menu choice, not typed input. It states the current project, requested issue/PR target, whether it is the same or a different project, and why a choice is required. A confirmed issue or pull-request creation is remembered for that exact resolved target for the rest of the OMP session; denied requests, generic writes, unresolved targets, and different action/target pairs prompt again.
 
