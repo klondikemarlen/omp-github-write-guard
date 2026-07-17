@@ -24,11 +24,6 @@ Install the public Git repository:
 omp plugin install github:klondikemarlen/omp-github-write-guard
 ```
 
-For development, run the repository directly:
-
-```bash
-omp --extension .
-```
 
 The package root declares `index.ts` in `package.json` under `omp.extensions` for packaged installation.
 
