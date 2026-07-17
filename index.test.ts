@@ -164,6 +164,20 @@ test("applies independent issue and pull-request creation policies", () => {
   });
 });
 
+test("always allows issue and pull-request creation in the current project", () => {
+  const confirmCurrent = {
+    issueCreationPolicies: { [current]: "confirm" },
+    pullRequestCreationPolicies: { [current]: "confirm" },
+  };
+
+  expect(guardDecision({ command: "gh issue create" }, confirmCurrent, current)).toEqual({ allow: true });
+  expect(guardDecision({ command: `gh pr create --repo ${current}` }, confirmCurrent, current)).toEqual({
+    allow: true,
+  });
+  expect(guardDecision(githubOperation("issue_create", current), confirmCurrent, current)).toEqual({ allow: true });
+  expect(guardDecision(githubOperation("pr_create", current), confirmCurrent, current)).toEqual({ allow: true });
+});
+
 test("applies the creation policies to GitHub-tool operations", () => {
   expect(guardDecision(githubOperation("issue_create", owned), policy, current)).toEqual({ allow: true });
   expect(guardDecision(githubOperation("pr_create", owned), policy, current)).toMatchObject({
@@ -223,15 +237,14 @@ test("presents an informative, menu-confirmed creation choice", async () => {
   expect(title).toBe("Choose GitHub write action");
 });
 
-test("identifies same-project creation in the confirmation choice", async () => {
-  let prompt = "";
-  await hookHandler({})(
+test("does not prompt same-project creation", async () => {
+  let confirmations = 0;
+  const result = await hookHandler({})(
     { toolName: "bash", input: { command: "gh issue create" } },
-    { cwd: process.cwd(), hasUI: true, ui: { confirm: (_title, message) => ((prompt = message), true) } },
+    { cwd: process.cwd(), hasUI: true, ui: { confirm: () => ++confirmations > 0 } },
   );
-  expect(prompt).toContain(
-    `You are in ${current}. Create GitHub issue will create a GitHub artifact in ${current}. Choose an option because this is this project.`,
-  );
+  expect(result).toBeUndefined();
+  expect(confirmations).toBe(0);
 });
 
 test("remembers only confirmed resolved creation requests", async () => {
@@ -256,25 +269,6 @@ test("remembers only confirmed resolved creation requests", async () => {
   expect(confirmations).toBe(4);
 });
 
-test("remembers resolved current-checkout creation requests", async () => {
-  let confirmations = 0;
-  const handler = hookHandler();
-  const context = {
-    cwd: process.cwd(),
-    hasUI: true,
-    ui: {
-      confirm: () => {
-        confirmations++;
-        return true;
-      },
-    },
-  };
-
-  await handler({ toolName: "bash", input: { command: "gh pr create" } }, context);
-  await handler({ toolName: "bash", input: { command: "gh pr create" } }, context);
-
-  expect(confirmations).toBe(1);
-});
 
 test("keeps confirmed creation approvals scoped to action and target", async () => {
   let confirmations = 0;
