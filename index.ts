@@ -151,7 +151,7 @@ function bashGitHubWrite(input: ToolInput): GitHubWrite | undefined {
   }
   if (/\bgit\s+push\b/.test(command)) {
     const remote = command.match(
-      /\bgit\s+push(?:\s+(?:-u|--set-upstream|--force|--force-with-lease|--tags|--all|--mirror|--dry-run))*\s+([^\s-][^\s]*)/,
+      /\bgit\s+push(?:\s+(?:-u|--set-upstream|--force-with-lease(?:=\S+)?|--force|--tags|--all|--mirror|--dry-run))*\s+([^\s-][^\s]*)/,
     )?.[1];
     return {
       action: "git push",

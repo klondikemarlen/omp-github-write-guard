@@ -122,6 +122,16 @@ test("keeps REST item writes confirmation-gated", () => {
   ).toMatchObject({ allow: false, action: "GitHub write", requiresConfirmation: true, target: owned });
 });
 
+test("requires confirmation before a force-with-lease push to another repository", () => {
+  expect(
+    guardDecision(
+      { command: `git push --force-with-lease git@github.com:${external}.git HEAD` },
+      policy,
+      current,
+    ),
+  ).toMatchObject({ allow: false, requiresConfirmation: true, target: external });
+});
+
 test("shows the compact operation-and-target confirmation", async () => {
   let prompt = "";
   const result = await hookHandler()(
