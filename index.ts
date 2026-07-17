@@ -7,20 +7,36 @@ type GitPush = {
   requiresExplicitTarget?: boolean;
 };
 export type ToolCallEvent = { toolName: string; input: ToolInput };
+type ToolResultEvent = {
+  toolName: string;
+  input: ToolInput;
+  details: unknown;
+  isError: boolean;
+};
 export type ToolCallResult = { block: true; reason: string } | undefined;
-export type HookContext = { cwd: string };
+export type HookContext = { cwd: string; hasUI?: boolean };
 export type ToolCallHandler = (event: ToolCallEvent, ctx: HookContext) => ToolCallResult;
+type ToolResultHandler = (event: ToolResultEvent, ctx: HookContext) => void;
 type AuthorizedGitPushParams = {
   remote: string;
   refspecs?: string[];
   cwd?: string;
+};
+type ZodSchema = {
+  describe(description: string): ZodSchema;
+  optional(): ZodSchema;
+};
+type Zod = {
+  string(): ZodSchema;
+  array(value: ZodSchema): ZodSchema;
+  object(shape: Record<string, ZodSchema>): ZodSchema;
 };
 type AuthorizedGitPushTool = {
   name: "authorized_git_push";
   label: string;
   description: string;
   parameters: unknown;
-  approval: { tier: "exec"; override: true; reason: string };
+  approval: "read";
   formatApprovalDetails(params: AuthorizedGitPushParams): string[];
   execute(
     toolCallId: string,
@@ -32,13 +48,15 @@ type AuthorizedGitPushTool = {
 };
 type ExtensionAPI = {
   on(event: "tool_call", handler: ToolCallHandler): void;
+  on(event: "tool_result", handler: ToolResultHandler): void;
   registerTool(tool: AuthorizedGitPushTool): void;
-  zod: unknown;
+  zod: Zod;
   exec(
     command: string,
     args: string[],
     options: { cwd: string; signal?: AbortSignal },
   ): Promise<{ code: number; stdout: string; stderr: string; killed?: boolean }>;
+  sendUserMessage(content: string, options: { deliverAs: "steer" }): void;
 };
 
 function normalizeRepository(value: unknown): string | undefined {
@@ -138,37 +156,75 @@ export function currentCheckoutRepository(cwd: string): string | undefined {
   return gitRemoteRepository(cwd, "origin");
 }
 
+const AUTHORIZATION_QUESTION_ID = "authorize_git_push";
+const APPROVE_PUSH = "Approve push";
+
+function isAuthorizationAsk(input: ToolInput, target: string): boolean {
+  const questions = input.questions;
+  if (!Array.isArray(questions) || questions.length !== 1) return false;
+
+  const question = questions[0];
+  if (
+    typeof question !== "object" ||
+    question === null ||
+    !("id" in question) ||
+    !("question" in question)
+  ) {
+    return false;
+  }
+
+  return (
+    question.id === AUTHORIZATION_QUESTION_ID &&
+    question.question === `Allow git push to ${target}?`
+  );
+}
+
+function isPushApproved(details: unknown): boolean {
+  if (
+    typeof details !== "object" ||
+    details === null ||
+    !("selectedOptions" in details) ||
+    !Array.isArray(details.selectedOptions)
+  ) {
+    return false;
+  }
+
+  return details.selectedOptions.includes(APPROVE_PUSH);
+}
+
 export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
   return function githubWriteGuard(pi: ExtensionAPI): void {
-    const z = pi.zod as {
-      string(): { describe(description: string): unknown; optional(): unknown };
-      array(value: unknown): { optional(): unknown };
-      object(shape: Record<string, unknown>): unknown;
-    };
+    let pendingAuthorization: { target: string } | undefined;
+    let authorizedTarget: string | undefined;
+    const z = pi.zod;
     pi.registerTool({
       name: "authorized_git_push",
-      label: "Authorize Git Push",
-      description:
-        "Push to a GitHub remote after standard OMP approval. Use when an external git push is blocked.",
+      label: "Authorized Git Push",
+      description: "Push once after the user approves the matching OMP ask prompt.",
       parameters: z.object({
         remote: z.string().describe("Git remote name or GitHub URL to push to"),
         refspecs: z.array(z.string()).optional(),
         cwd: z.string().optional(),
       }),
-      approval: {
-        tier: "exec",
-        override: true,
-        reason: "Git push can write to a repository outside the current checkout.",
+      approval: "read",
+      formatApprovalDetails: ({ remote, refspecs, cwd }) => {
+        const target = normalizeRepository(remote) ?? (cwd && gitRemoteRepository(cwd, remote, true));
+        return [
+          `Git push target: ${target ?? remote}`,
+          ...(refspecs?.length ? [`Refspecs: ${refspecs.join(" ")}`] : []),
+          ...(cwd ? [`Working directory: ${cwd}`] : []),
+        ];
       },
-      formatApprovalDetails: ({ remote, refspecs, cwd }) => [
-        `Git push remote: ${remote}`,
-        ...(refspecs?.length ? [`Refspecs: ${refspecs.join(" ")}`] : []),
-        ...(cwd ? [`Working directory: ${cwd}`] : []),
-      ],
       async execute(_toolCallId, params, signal, _onUpdate, ctx) {
         const cwd = params.cwd ?? ctx.cwd;
         const target = normalizeRepository(params.remote) ?? gitRemoteRepository(cwd, params.remote, true);
         if (!target) throw new Error(`GitHub push target cannot be resolved for ${params.remote}.`);
+
+        const approvedTarget = authorizedTarget;
+        authorizedTarget = undefined;
+        if (approvedTarget !== target) {
+          throw new Error(`Git push to ${target} requires an approved OMP ask prompt.`);
+        }
 
         const result = await pi.exec("git", ["push", params.remote, ...(params.refspecs ?? [])], {
           cwd,
@@ -182,6 +238,21 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
           details: { target, remote: params.remote, refspecs: params.refspecs ?? [] },
         };
       },
+    });
+    pi.on("tool_result", (event) => {
+      const pending = pendingAuthorization;
+      if (
+        !pending ||
+        event.toolName !== "ask" ||
+        !isAuthorizationAsk(event.input, pending.target)
+      ) {
+        return;
+      }
+
+      pendingAuthorization = undefined;
+      if (!event.isError && isPushApproved(event.details)) {
+        authorizedTarget = pending.target;
+      }
     });
     pi.on("tool_call", (event, ctx) => {
       if (event.toolName !== "bash" || !gitPushWrite(event.input)) return;
@@ -208,13 +279,24 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
       );
       if (decision.allow) return;
 
-      const target = decision.target ?? "an unresolved target";
-      return {
-        block: true,
-        reason:
-          `Blocked git push targeting ${target}: ${decision.reason}. ` +
-          "Use authorized_git_push with an explicit remote and refspecs to request standard OMP approval.",
-      };
+      const target = decision.target;
+      const reason = `Blocked git push targeting ${target ?? "an unresolved target"}: ${decision.reason}.`;
+      if (!target) return { block: true, reason };
+      if (!ctx.hasUI) {
+        return { block: true, reason: `${reason} Interactive authorization requires OMP UI.` };
+      }
+      if (pendingAuthorization || authorizedTarget) {
+        return { block: true, reason: `${reason} An external push authorization is already pending.` };
+      }
+
+      pendingAuthorization = { target };
+      pi.sendUserMessage(
+        `Call the ask tool now with one question: id "${AUTHORIZATION_QUESTION_ID}", question ` +
+          `"Allow git push to ${target}?", and options "${APPROVE_PUSH}" and "Reject push". ` +
+          "Do not run another tool before the answer. If approved, call authorized_git_push for that target; otherwise stop.",
+        { deliverAs: "steer" },
+      );
+      return { block: true, reason: `${reason} OMP ask authorization requested.` };
     });
   };
 }

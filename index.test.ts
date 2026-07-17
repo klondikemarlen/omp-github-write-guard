@@ -11,11 +11,9 @@ import {
 
 const current = "klondikemarlen/omp-github-write-guard";
 const external = "elsewhere/example";
-const approvalInstructions =
-  " Use authorized_git_push with an explicit remote and refspecs to request standard OMP approval.";
 
 type AuthorizedGitPush = {
-  approval: { tier: "exec"; override: true; reason: string };
+  approval: "read";
   formatApprovalDetails(params: { remote: string; refspecs?: string[]; cwd?: string }): string[];
   execute(
     toolCallId: string,
@@ -25,19 +23,31 @@ type AuthorizedGitPush = {
     ctx: { cwd: string },
   ): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, unknown> }>;
 };
+type ToolResultHandler = (
+  event: {
+    toolName: string;
+    input: Record<string, unknown>;
+    details: unknown;
+    isError: boolean;
+  },
+  ctx: { cwd: string; hasUI?: boolean },
+) => void;
 
 function createGuard(
   exec = async () => ({ code: 0, stdout: "", stderr: "" }),
+  sendUserMessage = (_content: string) => {},
 ) {
-  let handler: ToolCallHandler | undefined;
+  let toolCallHandler: ToolCallHandler | undefined;
+  let toolResultHandler: ToolResultHandler | undefined;
   let authorizedGitPush: AuthorizedGitPush | undefined;
   const schema = {
     describe: () => schema,
     optional: () => schema,
   };
   createGitHubWriteGuard()({
-    on: (_event, registered) => {
-      handler = registered;
+    on: (event, handler) => {
+      if (event === "tool_call") toolCallHandler = handler;
+      else toolResultHandler = handler;
     },
     registerTool: (tool) => {
       authorizedGitPush = tool;
@@ -48,8 +58,13 @@ function createGuard(
       object: () => schema,
     },
     exec,
+    sendUserMessage,
   });
-  return { handler: handler!, authorizedGitPush: authorizedGitPush! };
+  return {
+    handler: toolCallHandler!,
+    resultHandler: toolResultHandler!,
+    authorizedGitPush: authorizedGitPush!,
+  };
 }
 
 test("normalizes the checkout origin", () => {
@@ -81,65 +96,90 @@ test("does not treat quoted git push text as a write", () => {
   expect(result).toBeUndefined();
 });
 
-test("hard-blocks resolved external targets synchronously", () => {
-  const handler = createGuard().handler;
+test("steers external pushes to the default ask tool", () => {
+  const messages: string[] = [];
+  const { handler } = createGuard(undefined, (content) => messages.push(content));
   const result = handler(
     {
       toolName: "bash",
-      input: { command: ` git push --force-with-lease git@github.com:${external}.git HEAD` },
+      input: { command: `git push git@github.com:${external}.git HEAD` },
     },
-    { cwd: process.cwd() },
+    { cwd: process.cwd(), hasUI: true },
   );
 
   expect(result).toEqual({
     block: true,
     reason:
-      `Blocked git push targeting ${external}: the target differs from the current checkout (${current}).` +
-      approvalInstructions,
+      `Blocked git push targeting ${external}: the target differs from the current checkout (${current}). ` +
+      "OMP ask authorization requested.",
   });
-  expect(result).not.toBeInstanceOf(Promise);
+  expect(messages).toHaveLength(1);
+  expect(messages[0]).toContain('Call the ask tool now with one question: id "authorize_git_push"');
+  expect(messages[0]).toContain(`Allow git push to ${external}?`);
 });
 
-test("uses standard approval for an authorized push", async () => {
+test("executes exactly one push after the matching ask approval", async () => {
   const calls: { command: string; args: string[]; cwd: string }[] = [];
-  const { authorizedGitPush } = createGuard(async (command, args, { cwd }) => {
-    calls.push({ command, args, cwd });
-    return { code: 0, stdout: "", stderr: "" };
-  });
+  const messages: string[] = [];
+  const guard = createGuard(
+    async (command, args, { cwd }) => {
+      calls.push({ command, args, cwd });
+      return { code: 0, stdout: "", stderr: "" };
+    },
+    (content) => messages.push(content),
+  );
   const repository = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
   mkdirSync(repository, { recursive: true });
   try {
     execFileSync("git", ["init", repository]);
     execFileSync("git", ["-C", repository, "remote", "add", "origin", `git@github.com:${external}.git`]);
 
-    expect(authorizedGitPush.approval).toEqual({
-      tier: "exec",
-      override: true,
-      reason: "Git push can write to a repository outside the current checkout.",
-    });
     expect(
-      authorizedGitPush.formatApprovalDetails({
+      guard.handler(
+        { toolName: "bash", input: { command: "git push origin", cwd: repository } },
+        { cwd: process.cwd(), hasUI: true },
+      ),
+    ).toMatchObject({ block: true });
+    expect(messages).toHaveLength(1);
+    expect(guard.authorizedGitPush.approval).toBe("read");
+    expect(
+      guard.authorizedGitPush.formatApprovalDetails({
         remote: "origin",
         refspecs: ["HEAD"],
         cwd: repository,
       }),
     ).toEqual([
-      "Git push remote: origin",
+      `Git push target: ${external}`,
       "Refspecs: HEAD",
       `Working directory: ${repository}`,
     ]);
     await expect(
-      authorizedGitPush.execute(
+      guard.authorizedGitPush.execute(
         "tool-call",
-        { remote: "unknown", cwd: repository },
+        { remote: "origin", cwd: repository },
         undefined,
         undefined,
         { cwd: process.cwd() },
       ),
-    ).rejects.toThrow("GitHub push target cannot be resolved for unknown.");
-    expect(calls).toEqual([]);
+    ).rejects.toThrow(`Git push to ${external} requires an approved OMP ask prompt.`);
+    guard.resultHandler(
+      {
+        toolName: "ask",
+        input: {
+          questions: [
+            {
+              id: "authorize_git_push",
+              question: `Allow git push to ${external}?`,
+            },
+          ],
+        },
+        details: { selectedOptions: ["Approve push"] },
+        isError: false,
+      },
+      { cwd: process.cwd(), hasUI: true },
+    );
     expect(
-      await authorizedGitPush.execute(
+      await guard.authorizedGitPush.execute(
         "tool-call",
         { remote: "origin", refspecs: ["HEAD"], cwd: repository },
         undefined,
@@ -151,6 +191,70 @@ test("uses standard approval for an authorized push", async () => {
       details: { target: external, remote: "origin", refspecs: ["HEAD"] },
     });
     expect(calls).toEqual([{ command: "git", args: ["push", "origin", "HEAD"], cwd: repository }]);
+    await expect(
+      guard.authorizedGitPush.execute(
+        "tool-call",
+        { remote: "origin", cwd: repository },
+        undefined,
+        undefined,
+        { cwd: process.cwd() },
+      ),
+    ).rejects.toThrow(`Git push to ${external} requires an approved OMP ask prompt.`);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("does not authorize a rejected ask or headless push", async () => {
+  const messages: string[] = [];
+  const guard = createGuard(undefined, (content) => messages.push(content));
+  const repository = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  mkdirSync(repository, { recursive: true });
+  try {
+    execFileSync("git", ["init", repository]);
+    execFileSync("git", ["-C", repository, "remote", "add", "origin", `git@github.com:${external}.git`]);
+
+    expect(
+      guard.handler(
+        { toolName: "bash", input: { command: "git push origin", cwd: repository } },
+        { cwd: process.cwd(), hasUI: false },
+      ),
+    ).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("Interactive authorization requires OMP UI."),
+    });
+    expect(messages).toEqual([]);
+    expect(
+      guard.handler(
+        { toolName: "bash", input: { command: "git push origin", cwd: repository } },
+        { cwd: process.cwd(), hasUI: true },
+      ),
+    ).toMatchObject({ block: true });
+    guard.resultHandler(
+      {
+        toolName: "ask",
+        input: {
+          questions: [
+            {
+              id: "authorize_git_push",
+              question: `Allow git push to ${external}?`,
+            },
+          ],
+        },
+        details: { selectedOptions: ["Reject push"] },
+        isError: false,
+      },
+      { cwd: process.cwd(), hasUI: true },
+    );
+    await expect(
+      guard.authorizedGitPush.execute(
+        "tool-call",
+        { remote: "origin", cwd: repository },
+        undefined,
+        undefined,
+        { cwd: process.cwd() },
+      ),
+    ).rejects.toThrow(`Git push to ${external} requires an approved OMP ask prompt.`);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -171,49 +275,27 @@ test("hard-blocks unresolved checkouts and targets", () => {
   });
 });
 
-test("resolves named push remotes", () => {
+test("resolves named and git -C push remotes", () => {
   const repository = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
   mkdirSync(repository, { recursive: true });
   try {
     execFileSync("git", ["init", repository]);
     execFileSync("git", ["-C", repository, "remote", "add", "origin", `git@github.com:${current}.git`]);
-    execFileSync("git", ["-C", repository, "remote", "add", "upstream", `git@github.com:${current}.git`]);
-    execFileSync("git", ["-C", repository, "remote", "set-url", "--push", "upstream", `git@github.com:${external}.git`]);
+    execFileSync("git", ["-C", repository, "remote", "add", "upstream", `git@github.com:${external}.git`]);
+    const guard = createGuard();
 
     expect(
-      createGuard().handler(
+      guard.handler(
         { toolName: "bash", input: { command: "git push --atomic upstream", cwd: repository } },
-        { cwd: repository },
+        { cwd: repository, hasUI: false },
       ),
-    ).toEqual({
-      block: true,
-      reason:
-        `Blocked git push targeting ${external}: the target differs from the current checkout (${current}).` +
-        approvalInstructions,
-    });
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("resolves git -C push repositories", () => {
-  const repository = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
-  mkdirSync(repository, { recursive: true });
-  try {
-    execFileSync("git", ["init", repository]);
-    execFileSync("git", ["-C", repository, "remote", "add", "origin", `git@github.com:${external}.git`]);
-
+    ).toMatchObject({ block: true, reason: expect.stringContaining(external) });
     expect(
       createGuard().handler(
-        { toolName: "bash", input: { command: `git -C ${repository} push origin` } },
-        { cwd: process.cwd() },
+        { toolName: "bash", input: { command: `git -C ${repository} push upstream` } },
+        { cwd: process.cwd(), hasUI: false },
       ),
-    ).toEqual({
-      block: true,
-      reason:
-        `Blocked git push targeting ${external}: the target differs from the current checkout (${current}).` +
-        approvalInstructions,
-    });
+    ).toMatchObject({ block: true, reason: expect.stringContaining(external) });
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -235,7 +317,7 @@ test("treats a git worktree as its origin repository", () => {
     expect(
       createGuard().handler(
         { toolName: "bash", input: { command: "git push origin", cwd: worktree } },
-        { cwd: worktree },
+        { cwd: worktree, hasUI: true },
       ),
     ).toBeUndefined();
   } finally {
