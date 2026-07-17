@@ -91,6 +91,7 @@ function githubDeviceWrite(input: ToolInput): GitHubWrite | undefined {
 
     const operation = op === "issue_create" || op === "pr_create" ? op : undefined;
     const head = typeof payload.head === "string" ? payload.head : undefined;
+    const target = normalizeRepository(payload.repo);
     return {
       action:
         operation === "issue_create"
@@ -99,8 +100,9 @@ function githubDeviceWrite(input: ToolInput): GitHubWrite | undefined {
             ? "Create pull request"
             : op,
       operation,
-      target: normalizeRepository(payload.repo),
+      target,
       resource: head ? `branch ${head}` : undefined,
+      requiresExplicitTarget: Object.hasOwn(payload, "repo") && !target,
     };
   } catch {
     return { action: "GitHub write with unreadable arguments", requiresExplicitTarget: true };
