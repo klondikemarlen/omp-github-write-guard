@@ -178,6 +178,15 @@ test("always allows issue and pull-request creation in the current project", () 
   expect(guardDecision(githubOperation("pr_create", current), confirmCurrent, current)).toEqual({ allow: true });
 });
 
+test("confirms malformed GitHub-device targets instead of treating them as current-project writes", () => {
+  expect(
+    guardDecision({ path: "xd://github", content: JSON.stringify({ op: "pr_create" }) }, {}, current),
+  ).toEqual({ allow: true });
+  expect(
+    guardDecision({ path: "xd://github", content: JSON.stringify({ op: "pr_create", repo: "" }) }, {}, current),
+  ).toMatchObject({ allow: false, requiresConfirmation: true, unresolvedTarget: true });
+});
+
 test("applies the creation policies to GitHub-tool operations", () => {
   expect(guardDecision(githubOperation("issue_create", owned), policy, current)).toEqual({ allow: true });
   expect(guardDecision(githubOperation("pr_create", owned), policy, current)).toMatchObject({
