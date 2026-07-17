@@ -1,8 +1,8 @@
 # OMP GitHub Write Guard
 
-Opt-in OMP extension that protects GitHub writes outside the current checkout. It identifies the operation and target, then either allows, confirms, or blocks it according to local policy.
+Opt-in OMP extension that protects GitHub writes outside the current checkout. It identifies the operation and target, then either allows it or presents an informative confirmation choice.
 
-It never hard-codes a GitHub owner or repository.
+It never hard-codes a GitHub owner or repository, and Git worktrees inherit the same GitHub project identity as their origin repository.
 
 ## Install
 Install the public Git repository:
@@ -25,23 +25,26 @@ Policy is non-secret JSON. By default the plugin reads `~/.omp/agent/github-writ
 
 ```json
 {
-  "trustedOwners": ["example-org"],
-  "allowOwnedIssueCreation": true,
-  "blockExternalPullRequests": true
+  "issueCreationPolicies": {
+    "example-org/repository": "allow"
+  },
+  "pullRequestCreationPolicies": {
+    "example-org/repository": "confirm"
+  }
 }
 ```
 
-- With no configuration, writes outside the current checkout require confirmation.
-- `trustedOwners` identifies organizations or users that receive the owned-policy behavior.
-- `allowOwnedIssueCreation` permits new issues in trusted owners without confirmation.
-- Pull-request creation in a trusted owner always requires a target-specific confirmation.
-- `blockExternalPullRequests` denies PR creation outside trusted owners before execution. Its default is `false`.
+Use the same two JSON fields in OMP's plugin settings UI. Plugin UI values override the corresponding local-policy field. Each map uses exact `owner/repository` targets, case-insensitively:
 
-Confirmations explain whether the write targets the current checkout, another repository, or an unresolved target. A confirmed issue or pull-request creation is remembered for that exact resolved target for the rest of the OMP session; denied requests, generic writes, unresolved targets, and different action/target pairs prompt again.
+- `allow` — create without a confirmation.
+- `confirm` — show the confirmation choice.
+- Unlisted or malformed entries — show the confirmation choice.
+
+No operation is hard-blocked by policy. The confirmation is an OMP menu choice, not typed input. It states the current project, requested issue/PR target, whether it is the same or a different project, and why a choice is required. A confirmed issue or pull-request creation is remembered for that exact resolved target for the rest of the OMP session; denied requests, generic writes, unresolved targets, and different action/target pairs prompt again.
 
 ```text
-Create pull request will write a GitHub artifact to example-org/repository, not the current checkout.
-Approval prevents accidental writes to an unrelated repository.
+You are in example-org/current-project. Create pull request will create a GitHub artifact in example-org/repository.
+Choose an option because this is a different project.
 ```
 
 ## Local Policy Migration
