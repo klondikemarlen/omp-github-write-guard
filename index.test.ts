@@ -106,6 +106,27 @@ test("resolves named push remotes", () => {
   }
 });
 
+test("resolves git -C push repositories", () => {
+  const repository = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  mkdirSync(repository, { recursive: true });
+  try {
+    execFileSync("git", ["init", repository]);
+    execFileSync("git", ["-C", repository, "remote", "add", "origin", `git@github.com:${external}.git`]);
+
+    expect(
+      hookHandler()(
+        { toolName: "bash", input: { command: `git -C ${repository} push origin` } },
+        { cwd: process.cwd() },
+      ),
+    ).toEqual({
+      block: true,
+      reason: `Blocked git push targeting ${external}: the target differs from the current checkout (${current}).`,
+    });
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("treats a git worktree as its origin repository", () => {
   const repository = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
   const worktree = `${repository}-worktree`;

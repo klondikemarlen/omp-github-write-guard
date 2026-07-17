@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
 
 type ToolInput = Record<string, unknown>;
 type GitPush = {
@@ -27,11 +28,22 @@ function normalizeRepository(value: unknown): string | undefined {
   return owner && repository ? `${owner}/${repository}`.toLowerCase() : undefined;
 }
 
-const GIT_PUSH_COMMAND = /(?:^|&&|\|\||;|\||\n)\s*git\s+push\b/;
+const GIT_PUSH_COMMAND =
+  /(?:^|&&|\|\||;|\||\n)\s*git(?<directories>(?:\s+-C\s+\S+)*)\s+push\b/;
+
+function gitPushCwd(command: string, cwd: string): string {
+  const directories = command.match(GIT_PUSH_COMMAND)?.groups?.directories;
+  if (!directories) return cwd;
+
+  return [...directories.matchAll(/\s+-C\s+(\S+)/g)].reduce(
+    (currentCwd, [, directory]) => resolve(currentCwd, directory),
+    cwd,
+  );
+}
 
 function gitPushRemote(command: string): string | undefined {
   return command.match(
-    /(?:^|&&|\|\||;|\||\n)\s*git\s+push(?:\s+(?:-u|--set-upstream|--force-with-lease(?:=\S+)?|--force|--tags|--all|--mirror|--dry-run|--atomic))*\s+([^\s-][^\s]*)/,
+    /(?:^|&&|\|\||;|\||\n)\s*git(?:\s+-C\s+\S+)*\s+push(?:\s+(?:-u|--set-upstream|--force-with-lease(?:=\S+)?|--force|--tags|--all|--mirror|--dry-run|--atomic))*\s+([^\s-][^\s]*)/,
   )?.[1];
 }
 
@@ -105,7 +117,11 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
     pi.on("tool_call", (event, ctx) => {
       if (event.toolName !== "bash" || !gitPushWrite(event.input)) return;
 
-      const commandCwd = typeof event.input.cwd === "string" ? event.input.cwd : ctx.cwd;
+      const toolCwd = typeof event.input.cwd === "string" ? event.input.cwd : ctx.cwd;
+      const commandCwd =
+        typeof event.input.command === "string"
+          ? gitPushCwd(event.input.command, toolCwd)
+          : toolCwd;
       const pushRemote = typeof event.input.command === "string" ? gitPushRemote(event.input.command) : undefined;
       const currentRepository = currentCheckoutRepository(ctx.cwd);
       const resolvedPushTarget =
