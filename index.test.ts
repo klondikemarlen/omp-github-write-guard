@@ -233,6 +233,28 @@ test("remembers resolved current-checkout creation requests", async () => {
   expect(confirmations).toBe(1);
 });
 
+test("keeps confirmed creation approvals scoped to action and target", async () => {
+  let confirmations = 0;
+  const handler = hookHandler({ trustedOwners: ["acme"] });
+  const context = {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      confirm: () => {
+        confirmations++;
+        return true;
+      },
+    },
+  };
+
+  await handler({ toolName: "bash", input: { command: `gh pr create --repo ${owned}` } }, context);
+  await handler({ toolName: "bash", input: { command: `gh pr create --repo ${owned}` } }, context);
+  await handler({ toolName: "bash", input: { command: "gh pr create --repo acme/other" } }, context);
+  await handler({ toolName: "bash", input: { command: `gh issue create --repo ${owned}` } }, context);
+
+  expect(confirmations).toBe(3);
+});
+
 test("does not remember unresolved targets", async () => {
   let confirmations = 0;
   const handler = hookHandler();
