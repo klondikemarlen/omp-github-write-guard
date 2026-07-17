@@ -248,6 +248,31 @@ export function guardDecision(
   return { allow: true };
 }
 
+function confirmationPrompt(
+  decision: Extract<GuardDecision, { allow: false }>,
+  currentRepository?: string,
+): string {
+  const target = decision.target ?? "an unresolved target";
+  const unresolvedTarget = decision.unresolvedTarget === true || decision.target === undefined;
+  const writesElsewhere = !unresolvedTarget && decision.target !== currentRepository;
+  const location = unresolvedTarget
+    ? `${decision.action} names a GitHub target that could not be resolved.`
+    : writesElsewhere
+      ? `${decision.action} will write a GitHub artifact to ${target}, not the current checkout ${currentRepository ?? "repository"}.`
+      : `${decision.action} will write a GitHub artifact to the current checkout ${target}.`;
+  const purpose = unresolvedTarget
+    ? "Approval is required because the target cannot be proven to be the current checkout."
+    : writesElsewhere
+      ? "Approval prevents accidental writes to an unrelated repository."
+      : "Approval confirms that this target-specific write is intentional.";
+  const remembered = decision.confirmationKey
+    ? " Approval is remembered for this action and target for the rest of this session."
+    : "";
+  const reasonSuffix = unresolvedTarget ? "" : ` ${decision.reason}.`;
+
+  return `${location} ${purpose}${remembered}${reasonSuffix}`;
+}
+
 export function currentCheckoutRepository(cwd: string): string | undefined {
   try {
     return normalizeRepository(
@@ -299,23 +324,7 @@ export function createGitHubWriteGuard(policy: GuardPolicy = {}): (pi: Extension
 
       if (decision.confirmationKey && approvedConfirmations.has(decision.confirmationKey)) return;
 
-      const unresolvedTarget = decision.unresolvedTarget === true || decision.target === undefined;
-      const writesElsewhere = !unresolvedTarget && decision.target !== currentRepository;
-      const location = unresolvedTarget
-        ? `${decision.action} names a GitHub target that could not be resolved.`
-        : writesElsewhere
-          ? `${decision.action} will write a GitHub artifact to ${target}, not the current checkout ${currentRepository ?? "repository"}.`
-          : `${decision.action} will write a GitHub artifact to the current checkout ${target}.`;
-      const purpose = unresolvedTarget
-        ? "Approval is required because the target cannot be proven to be the current checkout."
-        : writesElsewhere
-          ? "Approval prevents accidental writes to an unrelated repository."
-          : "Approval confirms that this target-specific write is intentional.";
-      const remembered = decision.confirmationKey
-        ? " Approval is remembered for this action and target for the rest of this session."
-        : "";
-      const reasonSuffix = unresolvedTarget ? "" : ` ${decision.reason}.`;
-      const prompt = `${location} ${purpose}${remembered}${reasonSuffix}`;
+      const prompt = confirmationPrompt(decision, currentRepository);
       const confirmed = ctx.hasUI && (await ctx.ui.confirm("Confirm GitHub write", prompt));
       if (confirmed) {
         if (decision.confirmationKey) approvedConfirmations.add(decision.confirmationKey);
