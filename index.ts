@@ -1,36 +1,18 @@
 import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
 
 type ToolInput = Record<string, unknown>;
-type GitHubWrite = {
-  action: string;
+type GitPush = {
   target?: string;
   requiresExplicitTarget?: boolean;
 };
 
 export type ToolCallEvent = { toolName: string; input: ToolInput };
 export type ToolCallResult = { block: true; reason: string } | undefined;
-export type HookContext = {
-  cwd: string;
-  hasUI: boolean;
-  ui: { confirm(title: string, message: string): boolean | Promise<boolean> };
-};
-export type ToolCallHandler = (
-  event: ToolCallEvent,
-  ctx: HookContext,
-) => ToolCallResult | Promise<ToolCallResult>;
+export type HookContext = { cwd: string };
+export type ToolCallHandler = (event: ToolCallEvent, ctx: HookContext) => ToolCallResult;
 type ExtensionAPI = {
   on(event: "tool_call", handler: ToolCallHandler): void;
-  logger?: { warn(message: string): void };
-};
-
-
-const GITHUB_WRITE_OPERATIONS: Record<string, true> = {
-  pr_create: true,
-  pr_push: true,
-  issue_create: true,
-  issue_comment: true,
-  pr_comment: true,
-  repo_fork: true,
 };
 
 function normalizeRepository(value: unknown): string | undefined {
@@ -46,128 +28,43 @@ function normalizeRepository(value: unknown): string | undefined {
   return owner && repository ? `${owner}/${repository}`.toLowerCase() : undefined;
 }
 
-function repositoryTarget(command: string): string | undefined {
-  const match =
-    command.match(/(?:--repo|-R)(?:=|\s+)([^\s]+)/)?.[1] ??
-    command.match(/\brepos\/([^/\s]+)\/([^/\s?#]+)/i)?.slice(1).join("/") ??
-    command.match(/github\.com[/:]([^/\s]+)\/([^/\s?#]+)/i)?.slice(1).join("/");
+const GIT_PUSH_COMMAND =
+  /(?:^|&&|\|\||;|\||\n)\s*git(?<directories>(?:\s+-C\s+\S+)*)\s+push\b/;
 
-  return normalizeRepository(match?.replace(/^["']|["']$/g, ""));
+function gitPushCwd(command: string, cwd: string): string {
+  const directories = command.match(GIT_PUSH_COMMAND)?.groups?.directories;
+  if (!directories) return cwd;
+
+  return [...directories.matchAll(/\s+-C\s+(\S+)/g)].reduce(
+    (currentCwd, [, directory]) => resolve(currentCwd, directory),
+    cwd,
+  );
 }
-
-function hasRepositoryOption(command: string): boolean {
-  return /(?:--repo|-R)(?:=|\s+)/.test(command);
-}
-
-const GIT_PUSH_COMMAND = /(?:^|&&|\|\||;|\||\n)\s*git\s+push\b/;
 
 function gitPushRemote(command: string): string | undefined {
   return command.match(
-    /(?:^|&&|\|\||;|\||\n)\s*git\s+push(?:\s+(?:-u|--set-upstream|--force-with-lease(?:=\S+)?|--force|--tags|--all|--mirror|--dry-run|--atomic))*\s+([^\s-][^\s]*)/,
+    /(?:^|&&|\|\||;|\||\n)\s*git(?:\s+-C\s+\S+)*\s+push(?:\s+(?:-u|--set-upstream|--force-with-lease(?:=\S+)?|--force|--tags|--all|--mirror|--dry-run|--atomic))*\s+([^\s-][^\s]*)/,
   )?.[1];
 }
 
-function githubDeviceWrite(input: ToolInput): GitHubWrite | undefined {
-  if (input.path !== "xd://github" || typeof input.content !== "string") return undefined;
+function gitPushWrite(input: ToolInput): GitPush | undefined {
+  if (typeof input.command !== "string" || !GIT_PUSH_COMMAND.test(input.command)) return undefined;
 
-  try {
-    const parsed: unknown = JSON.parse(input.content);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return { action: "GitHub write with unreadable arguments", requiresExplicitTarget: true };
-    }
-
-    const payload = parsed as ToolInput;
-    const op = typeof payload.op === "string" ? payload.op : undefined;
-    if (!op || !GITHUB_WRITE_OPERATIONS[op]) return undefined;
-
-    const target = normalizeRepository(payload.repo);
-    const requiresExplicitTarget = Object.hasOwn(payload, "repo") && !target;
-    return {
-      action:
-        op === "issue_create"
-          ? "Create GitHub issue"
-          : op === "pr_create"
-            ? "Create pull request"
-            : "GitHub write",
-      target: op === "repo_fork" ? undefined : target,
-      requiresExplicitTarget: op === "repo_fork" || requiresExplicitTarget,
-    };
-  } catch {
-    return { action: "GitHub write with unreadable arguments", requiresExplicitTarget: true };
-  }
+  const remote = gitPushRemote(input.command);
+  const target = normalizeRepository(remote);
+  return {
+    target,
+    requiresExplicitTarget: !remote || (remote !== "origin" && !target),
+  };
 }
-
-function bashGitHubWrite(input: ToolInput): GitHubWrite | undefined {
-  if (typeof input.command !== "string") return undefined;
-  const command = input.command;
-  const target = repositoryTarget(command);
-  const apiWrite =
-    /\bgh\s+api\b/.test(command) &&
-    (/(?:\s-X|\s--method)(?:\s+|=)(?:POST|PUT|PATCH|DELETE)\b/i.test(command) ||
-      /\s(?:-f|--field|--raw-field|--input)(?:\s+|=)/.test(command));
-  if (/\bgh\s+issue\s+create\b/.test(command)) {
-    return {
-      action: "Create GitHub issue",
-      target,
-      requiresExplicitTarget: hasRepositoryOption(command) && !target,
-    };
-  }
-  if (/\bgh\s+pr\s+create\b/.test(command)) {
-    return {
-      action: "Create pull request",
-      target,
-      requiresExplicitTarget: hasRepositoryOption(command) && !target,
-    };
-  }
-  if (apiWrite && /\brepos\/[^/\s]+\/[^/\s?#]+\/issues(?:[?\s]|$)/i.test(command)) {
-    return { action: "Create GitHub issue", target };
-  }
-  if (apiWrite && /\brepos\/[^/\s]+\/[^/\s?#]+\/pulls(?:[?\s]|$)/i.test(command)) {
-    return { action: "Create pull request", target };
-  }
-  if (/\bgh\s+repo\s+(?:fork|create|edit|delete|rename|archive|unarchive)\b/.test(command)) {
-    return {
-      action: "GitHub write",
-      target,
-      requiresExplicitTarget:
-        /\bgh\s+repo\s+fork\b/.test(command) ||
-        ((hasRepositoryOption(command) || /\bgh\s+repo\s+\w+\s+[^\s-]/.test(command)) && !target),
-    };
-  }
-  if (
-    /\bgh\s+(?:pr\s+(?:comment|checkout|edit|merge|close|reopen)|issue\s+(?:comment|edit|close|reopen|transfer|lock|unlock)|release\s+(?:create|edit|delete)|label\s+(?:create|edit|delete)|workflow\s+(?:run|enable|disable)|variable\s+(?:set|delete)|secret\s+(?:set|delete)|ruleset\s+(?:create|edit|delete)|deploy-key\s+(?:add|delete)|autolink\s+(?:create|delete)|run\s+(?:rerun|cancel)|cache\s+delete)\b/.test(
-      command,
-    ) ||
-    apiWrite
-  ) {
-    return {
-      action: "GitHub write",
-      target,
-      requiresExplicitTarget: hasRepositoryOption(command) && !target,
-    };
-  }
-  if (GIT_PUSH_COMMAND.test(command)) {
-    const remote = gitPushRemote(command);
-    const remoteTarget = normalizeRepository(remote);
-    return {
-      action: "git push",
-      target: remoteTarget,
-      requiresExplicitTarget: !remote || (remote !== "origin" && !remoteTarget),
-    };
-  }
-
-  return undefined;
-}
-
 
 export type GuardDecision =
   | { allow: true }
   | {
       allow: false;
-      action: string;
+      action: "git push";
       target?: string;
       reason: string;
-      requiresConfirmation?: true;
     };
 
 export function guardDecision(
@@ -176,31 +73,27 @@ export function guardDecision(
   defaultRepository = currentRepository,
   resolvedPushTarget?: string,
 ): GuardDecision {
-  const write = githubDeviceWrite(input) ?? bashGitHubWrite(input);
-  if (!write) return { allow: true };
+  const push = gitPushWrite(input);
+  if (!push) return { allow: true };
 
-  const target = write.requiresExplicitTarget ? write.target ?? resolvedPushTarget : write.target ?? defaultRepository;
+  const target = push.requiresExplicitTarget
+    ? push.target ?? resolvedPushTarget
+    : push.target ?? defaultRepository;
   const blocked = (reason: string): GuardDecision => ({
     allow: false,
-    action: write.action,
+    action: "git push",
     target,
     reason,
   });
 
   if (!currentRepository) {
-    return {
-      ...blocked("the current checkout has no resolvable GitHub origin repository"),
-      requiresConfirmation: true,
-    };
+    return blocked("the current checkout has no resolvable GitHub origin repository");
   }
-  if (!target) {
-    return { ...blocked("the GitHub target cannot be resolved"), requiresConfirmation: true };
-  }
+  if (!target) return blocked("the GitHub target cannot be resolved");
   if (target === currentRepository) return { allow: true };
 
-  return { ...blocked(`the target differs from the current checkout (${currentRepository})`), requiresConfirmation: true };
+  return blocked(`the target differs from the current checkout (${currentRepository})`);
 }
-
 
 function gitRemoteRepository(cwd: string, remote: string, push = false): string | undefined {
   try {
@@ -219,63 +112,38 @@ export function currentCheckoutRepository(cwd: string): string | undefined {
   return gitRemoteRepository(cwd, "origin");
 }
 
-
 export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
   return function githubWriteGuard(pi: ExtensionAPI): void {
-    const pendingConfirmations = new Set<string>();
-    pi.on("tool_call", async (event, ctx) => {
-      if (event.toolName !== "bash" && event.toolName !== "write" && event.toolName !== "github") return;
+    pi.on("tool_call", (event, ctx) => {
+      if (event.toolName !== "bash" || !gitPushWrite(event.input)) return;
 
-      const input =
-        event.toolName === "github"
-          ? { path: "xd://github", content: JSON.stringify(event.input) }
-          : event.input;
-      const defaultCwd =
-        event.toolName === "bash" && typeof event.input.cwd === "string" ? event.input.cwd : ctx.cwd;
-      const pushRemote =
-        event.toolName === "bash" &&
-        typeof event.input.command === "string" &&
-        GIT_PUSH_COMMAND.test(event.input.command)
-          ? gitPushRemote(event.input.command)
-          : undefined;
+      const toolCwd = typeof event.input.cwd === "string" ? event.input.cwd : ctx.cwd;
+      const commandCwd =
+        typeof event.input.command === "string"
+          ? gitPushCwd(event.input.command, toolCwd)
+          : toolCwd;
+      const pushRemote = typeof event.input.command === "string" ? gitPushRemote(event.input.command) : undefined;
       const currentRepository = currentCheckoutRepository(ctx.cwd);
       const resolvedPushTarget =
-        pushRemote && !normalizeRepository(pushRemote) ? gitRemoteRepository(defaultCwd, pushRemote, true) : undefined;
-      const defaultRepository = resolvedPushTarget ?? currentCheckoutRepository(defaultCwd);
-      const decision = guardDecision(input, currentRepository, defaultRepository, resolvedPushTarget);
+        pushRemote && !normalizeRepository(pushRemote)
+          ? gitRemoteRepository(commandCwd, pushRemote, true)
+          : undefined;
+      const defaultRepository =
+        resolvedPushTarget ??
+        (commandCwd === ctx.cwd ? currentRepository : currentCheckoutRepository(commandCwd));
+      const decision = guardDecision(
+        event.input,
+        currentRepository,
+        defaultRepository,
+        resolvedPushTarget,
+      );
       if (decision.allow) return;
 
       const target = decision.target ?? "an unresolved target";
-      const reason = `Blocked ${decision.action} targeting ${target}: ${decision.reason}.`;
-      if (!decision.requiresConfirmation) return { block: true, reason };
-
-      if (!ctx.hasUI) {
-        return { block: true, reason: `${reason} Explicit confirmation is required for this operation and target.` };
-      }
-
-      const confirmationKey = `${decision.action}\0${target}`;
-      if (pendingConfirmations.has(confirmationKey)) {
-        return { block: true, reason: `${reason} An identical confirmation is already pending.` };
-      }
-
-      pendingConfirmations.add(confirmationKey);
-      try {
-        if (
-          await ctx.ui.confirm(
-            "Choose GitHub write action",
-            `You are in ${currentRepository ?? "an unresolved session checkout"}. ${decision.action} will write to ${target}. ` +
-              "Choose an option because this is a different project.",
-          )
-        ) {
-          return;
-        }
-
-        return { block: true, reason: `${reason} Explicit confirmation is required for this operation and target.` };
-      } catch {
-        return { block: true, reason: `${reason} The confirmation could not be completed.` };
-      } finally {
-        pendingConfirmations.delete(confirmationKey);
-      }
+      return {
+        block: true,
+        reason: `Blocked git push targeting ${target}: ${decision.reason}.`,
+      };
     });
   };
 }

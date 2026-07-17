@@ -1,7 +1,7 @@
 {
   "name": "omp-github-write-guard",
   "version": "0.1.1",
-  "description": "Opt-in OMP guard for GitHub writes outside the current checkout.",
+  "description": "Opt-in OMP authorization guard for git pushes outside the current checkout.",
   "type": "module",
   "scripts": {
     "test": "bun test",

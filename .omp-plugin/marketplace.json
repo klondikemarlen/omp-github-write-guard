@@ -4,12 +4,12 @@
     "name": "klondikemarlen"
   },
   "metadata": {
-    "description": "Opt-in checkout-bound GitHub write protection for OMP."
+    "description": "Opt-in checkout-bound git-push authorization for OMP."
   },
   "plugins": [
     {
       "name": "omp-github-write-guard",
-      "description": "Classify and guard GitHub writes outside the current checkout.",
+      "description": "Hard-block git pushes outside the current checkout.",
       "source": "./",
       "category": "security",
       "tags": ["github", "safety", "omp"],
