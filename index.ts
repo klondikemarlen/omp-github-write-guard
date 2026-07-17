@@ -186,8 +186,15 @@ function isTrustedOwner(target: string | undefined, policy: Required<GuardPolicy
 
 export type GuardDecision =
   | { allow: true }
-  | { allow: false; action: string; target?: string; reason: string; requiresConfirmation?: true };
-
+  | {
+      allow: false;
+      action: string;
+      target?: string;
+      reason: string;
+      requiresConfirmation?: true;
+      confirmationKey?: string;
+      unresolvedTarget?: true;
+    };
 export function guardDecision(
   input: ToolInput,
   policy: GuardPolicy = {},
@@ -199,12 +206,16 @@ export function guardDecision(
 
   const configuredPolicy = resolvedPolicy(policy);
   const target = write.target ?? defaultRepository;
+  const confirmationKey =
+    write.operation && target && !write.requiresExplicitTarget ? `${write.operation}\0${target}` : undefined;
   const needsConfirmation = (reason: string): GuardDecision => ({
     allow: false,
     action: write.action,
     target,
     reason,
     requiresConfirmation: true,
+    confirmationKey,
+    unresolvedTarget: write.requiresExplicitTarget ? true : undefined,
   });
   const blocks = (reason: string): GuardDecision => ({ allow: false, action: write.action, target, reason });
 
@@ -262,6 +273,7 @@ export function loadPolicy(path = process.env.OMP_GITHUB_WRITE_GUARD_CONFIG): Gu
 
 export function createGitHubWriteGuard(policy: GuardPolicy = {}): (pi: ExtensionAPI) => void {
   return function githubWriteGuard(pi: ExtensionAPI): void {
+    const approvedConfirmations = new Set<string>();
     const configuredPolicy = resolvedPolicy(policy);
     pi.on("tool_call", async (event, ctx) => {
       if (event.toolName !== "bash" && event.toolName !== "write" && event.toolName !== "github") return;
@@ -272,10 +284,11 @@ export function createGitHubWriteGuard(policy: GuardPolicy = {}): (pi: Extension
           : event.input;
       const defaultCwd =
         event.toolName === "bash" && typeof event.input.cwd === "string" ? event.input.cwd : ctx.cwd;
+      const currentRepository = currentCheckoutRepository(ctx.cwd);
       const decision = guardDecision(
         input,
         configuredPolicy,
-        currentCheckoutRepository(ctx.cwd),
+        currentRepository,
         currentCheckoutRepository(defaultCwd),
       );
       if (decision.allow) return;
@@ -284,11 +297,32 @@ export function createGitHubWriteGuard(policy: GuardPolicy = {}): (pi: Extension
       const reason = `Blocked ${decision.action} targeting ${target}: ${decision.reason}.`;
       if (!decision.requiresConfirmation) return { block: true, reason };
 
-      const prompt = `Allow ${decision.action} targeting ${target}? ${decision.reason}.`;
-      const confirmed = ctx.hasUI && (await ctx.ui.confirm("Confirm external GitHub write", prompt));
-      if (!confirmed) {
-        return { block: true, reason: `${reason} Explicit confirmation is required for this operation and target.` };
+      if (decision.confirmationKey && approvedConfirmations.has(decision.confirmationKey)) return;
+
+      const unresolvedTarget = decision.unresolvedTarget === true || decision.target === undefined;
+      const writesElsewhere = !unresolvedTarget && decision.target !== currentRepository;
+      const location = unresolvedTarget
+        ? `${decision.action} names a GitHub target that could not be resolved.`
+        : writesElsewhere
+          ? `${decision.action} will write a GitHub artifact to ${target}, not the current checkout ${currentRepository ?? "repository"}.`
+          : `${decision.action} will write a GitHub artifact to the current checkout ${target}.`;
+      const purpose = unresolvedTarget
+        ? "Approval is required because the target cannot be proven to be the current checkout."
+        : writesElsewhere
+          ? "Approval prevents accidental writes to an unrelated repository."
+          : "Approval confirms that this target-specific write is intentional.";
+      const remembered = decision.confirmationKey
+        ? " Approval is remembered for this action and target for the rest of this session."
+        : "";
+      const reasonSuffix = unresolvedTarget ? "" : ` ${decision.reason}.`;
+      const prompt = `${location} ${purpose}${remembered}${reasonSuffix}`;
+      const confirmed = ctx.hasUI && (await ctx.ui.confirm("Confirm GitHub write", prompt));
+      if (confirmed) {
+        if (decision.confirmationKey) approvedConfirmations.add(decision.confirmationKey);
+        return;
       }
+
+      return { block: true, reason: `${reason} Explicit confirmation is required for this operation and target.` };
     });
   };
 }
