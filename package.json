@@ -14,19 +14,7 @@
     "url": "git+https://github.com/klondikemarlen/omp-github-write-guard.git"
   },
   "omp": {
-    "extensions": ["./index.ts"],
-    "settings": {
-      "issueCreationPolicies": {
-        "type": "string",
-        "default": "{}",
-        "description": "JSON map of exact owner/repository targets to allow or confirm for issue creation."
-      },
-      "pullRequestCreationPolicies": {
-        "type": "string",
-        "default": "{}",
-        "description": "JSON map of exact owner/repository targets to allow or confirm for pull-request creation."
-      }
-    }
+    "extensions": ["./index.ts"]
   },
   "pi": {
     "extensions": ["./index.ts"]
