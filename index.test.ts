@@ -11,15 +11,45 @@ import {
 
 const current = "klondikemarlen/omp-github-write-guard";
 const external = "elsewhere/example";
+const approvalInstructions =
+  " Use authorized_git_push with an explicit remote and refspecs to request standard OMP approval.";
 
-function hookHandler() {
+type AuthorizedGitPush = {
+  approval: { tier: "exec"; override: true; reason: string };
+  formatApprovalDetails(params: { remote: string; refspecs?: string[]; cwd?: string }): string[];
+  execute(
+    toolCallId: string,
+    params: { remote: string; refspecs?: string[]; cwd?: string },
+    signal: AbortSignal | undefined,
+    onUpdate: unknown,
+    ctx: { cwd: string },
+  ): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, unknown> }>;
+};
+
+function createGuard(
+  exec = async () => ({ code: 0, stdout: "", stderr: "" }),
+) {
   let handler: ToolCallHandler | undefined;
+  let authorizedGitPush: AuthorizedGitPush | undefined;
+  const schema = {
+    describe: () => schema,
+    optional: () => schema,
+  };
   createGitHubWriteGuard()({
     on: (_event, registered) => {
       handler = registered;
     },
+    registerTool: (tool) => {
+      authorizedGitPush = tool;
+    },
+    zod: {
+      string: () => schema,
+      array: () => schema,
+      object: () => schema,
+    },
+    exec,
   });
-  return handler!;
+  return { handler: handler!, authorizedGitPush: authorizedGitPush! };
 }
 
 test("normalizes the checkout origin", () => {
@@ -27,7 +57,7 @@ test("normalizes the checkout origin", () => {
 });
 
 test("only considers git push commands", () => {
-  const handler = hookHandler();
+  const handler = createGuard().handler;
   const context = { cwd: `/tmp/omp-github-write-guard-${crypto.randomUUID()}` };
 
   expect(guardDecision({ command: "gh issue create --repo elsewhere/example" }, current)).toEqual({
@@ -43,7 +73,7 @@ test("allows pushes to the current repository", () => {
 });
 
 test("does not treat quoted git push text as a write", () => {
-  const result = hookHandler()(
+  const result = createGuard().handler(
     { toolName: "bash", input: { command: 'git commit -m "mention git push"' } },
     { cwd: `/tmp/omp-github-write-guard-${crypto.randomUUID()}` },
   );
@@ -52,7 +82,7 @@ test("does not treat quoted git push text as a write", () => {
 });
 
 test("hard-blocks resolved external targets synchronously", () => {
-  const handler = hookHandler();
+  const handler = createGuard().handler;
   const result = handler(
     {
       toolName: "bash",
@@ -63,9 +93,67 @@ test("hard-blocks resolved external targets synchronously", () => {
 
   expect(result).toEqual({
     block: true,
-    reason: `Blocked git push targeting ${external}: the target differs from the current checkout (${current}).`,
+    reason:
+      `Blocked git push targeting ${external}: the target differs from the current checkout (${current}).` +
+      approvalInstructions,
   });
   expect(result).not.toBeInstanceOf(Promise);
+});
+
+test("uses standard approval for an authorized push", async () => {
+  const calls: { command: string; args: string[]; cwd: string }[] = [];
+  const { authorizedGitPush } = createGuard(async (command, args, { cwd }) => {
+    calls.push({ command, args, cwd });
+    return { code: 0, stdout: "", stderr: "" };
+  });
+  const repository = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  mkdirSync(repository, { recursive: true });
+  try {
+    execFileSync("git", ["init", repository]);
+    execFileSync("git", ["-C", repository, "remote", "add", "origin", `git@github.com:${external}.git`]);
+
+    expect(authorizedGitPush.approval).toEqual({
+      tier: "exec",
+      override: true,
+      reason: "Git push can write to a repository outside the current checkout.",
+    });
+    expect(
+      authorizedGitPush.formatApprovalDetails({
+        remote: "origin",
+        refspecs: ["HEAD"],
+        cwd: repository,
+      }),
+    ).toEqual([
+      "Git push remote: origin",
+      "Refspecs: HEAD",
+      `Working directory: ${repository}`,
+    ]);
+    await expect(
+      authorizedGitPush.execute(
+        "tool-call",
+        { remote: "unknown", cwd: repository },
+        undefined,
+        undefined,
+        { cwd: process.cwd() },
+      ),
+    ).rejects.toThrow("GitHub push target cannot be resolved for unknown.");
+    expect(calls).toEqual([]);
+    expect(
+      await authorizedGitPush.execute(
+        "tool-call",
+        { remote: "origin", refspecs: ["HEAD"], cwd: repository },
+        undefined,
+        undefined,
+        { cwd: process.cwd() },
+      ),
+    ).toEqual({
+      content: [{ type: "text", text: `Pushed to ${external}.` }],
+      details: { target: external, remote: "origin", refspecs: ["HEAD"] },
+    });
+    expect(calls).toEqual([{ command: "git", args: ["push", "origin", "HEAD"], cwd: repository }]);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
 });
 
 test("hard-blocks unresolved checkouts and targets", () => {
@@ -93,13 +181,15 @@ test("resolves named push remotes", () => {
     execFileSync("git", ["-C", repository, "remote", "set-url", "--push", "upstream", `git@github.com:${external}.git`]);
 
     expect(
-      hookHandler()(
+      createGuard().handler(
         { toolName: "bash", input: { command: "git push --atomic upstream", cwd: repository } },
         { cwd: repository },
       ),
     ).toEqual({
       block: true,
-      reason: `Blocked git push targeting ${external}: the target differs from the current checkout (${current}).`,
+      reason:
+        `Blocked git push targeting ${external}: the target differs from the current checkout (${current}).` +
+        approvalInstructions,
     });
   } finally {
     rmSync(repository, { recursive: true, force: true });
@@ -114,13 +204,15 @@ test("resolves git -C push repositories", () => {
     execFileSync("git", ["-C", repository, "remote", "add", "origin", `git@github.com:${external}.git`]);
 
     expect(
-      hookHandler()(
+      createGuard().handler(
         { toolName: "bash", input: { command: `git -C ${repository} push origin` } },
         { cwd: process.cwd() },
       ),
     ).toEqual({
       block: true,
-      reason: `Blocked git push targeting ${external}: the target differs from the current checkout (${current}).`,
+      reason:
+        `Blocked git push targeting ${external}: the target differs from the current checkout (${current}).` +
+        approvalInstructions,
     });
   } finally {
     rmSync(repository, { recursive: true, force: true });
@@ -141,7 +233,7 @@ test("treats a git worktree as its origin repository", () => {
 
     expect(currentCheckoutRepository(worktree)).toBe("acme/example");
     expect(
-      hookHandler()(
+      createGuard().handler(
         { toolName: "bash", input: { command: "git push origin", cwd: worktree } },
         { cwd: worktree },
       ),

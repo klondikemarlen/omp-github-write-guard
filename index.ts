@@ -6,13 +6,39 @@ type GitPush = {
   target?: string;
   requiresExplicitTarget?: boolean;
 };
-
 export type ToolCallEvent = { toolName: string; input: ToolInput };
 export type ToolCallResult = { block: true; reason: string } | undefined;
 export type HookContext = { cwd: string };
 export type ToolCallHandler = (event: ToolCallEvent, ctx: HookContext) => ToolCallResult;
+type AuthorizedGitPushParams = {
+  remote: string;
+  refspecs?: string[];
+  cwd?: string;
+};
+type AuthorizedGitPushTool = {
+  name: "authorized_git_push";
+  label: string;
+  description: string;
+  parameters: unknown;
+  approval: { tier: "exec"; override: true; reason: string };
+  formatApprovalDetails(params: AuthorizedGitPushParams): string[];
+  execute(
+    toolCallId: string,
+    params: AuthorizedGitPushParams,
+    signal: AbortSignal | undefined,
+    onUpdate: unknown,
+    ctx: HookContext,
+  ): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, unknown> }>;
+};
 type ExtensionAPI = {
   on(event: "tool_call", handler: ToolCallHandler): void;
+  registerTool(tool: AuthorizedGitPushTool): void;
+  zod: unknown;
+  exec(
+    command: string,
+    args: string[],
+    options: { cwd: string; signal?: AbortSignal },
+  ): Promise<{ code: number; stdout: string; stderr: string; killed?: boolean }>;
 };
 
 function normalizeRepository(value: unknown): string | undefined {
@@ -114,6 +140,49 @@ export function currentCheckoutRepository(cwd: string): string | undefined {
 
 export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
   return function githubWriteGuard(pi: ExtensionAPI): void {
+    const z = pi.zod as {
+      string(): { describe(description: string): unknown; optional(): unknown };
+      array(value: unknown): { optional(): unknown };
+      object(shape: Record<string, unknown>): unknown;
+    };
+    pi.registerTool({
+      name: "authorized_git_push",
+      label: "Authorize Git Push",
+      description:
+        "Push to a GitHub remote after standard OMP approval. Use when an external git push is blocked.",
+      parameters: z.object({
+        remote: z.string().describe("Git remote name or GitHub URL to push to"),
+        refspecs: z.array(z.string()).optional(),
+        cwd: z.string().optional(),
+      }),
+      approval: {
+        tier: "exec",
+        override: true,
+        reason: "Git push can write to a repository outside the current checkout.",
+      },
+      formatApprovalDetails: ({ remote, refspecs, cwd }) => [
+        `Git push remote: ${remote}`,
+        ...(refspecs?.length ? [`Refspecs: ${refspecs.join(" ")}`] : []),
+        ...(cwd ? [`Working directory: ${cwd}`] : []),
+      ],
+      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+        const cwd = params.cwd ?? ctx.cwd;
+        const target = normalizeRepository(params.remote) ?? gitRemoteRepository(cwd, params.remote, true);
+        if (!target) throw new Error(`GitHub push target cannot be resolved for ${params.remote}.`);
+
+        const result = await pi.exec("git", ["push", params.remote, ...(params.refspecs ?? [])], {
+          cwd,
+          signal,
+        });
+        if (result.killed) throw new Error("Git push was cancelled.");
+        if (result.code !== 0) throw new Error(result.stderr || "Git push failed.");
+
+        return {
+          content: [{ type: "text", text: `Pushed to ${target}.` }],
+          details: { target, remote: params.remote, refspecs: params.refspecs ?? [] },
+        };
+      },
+    });
     pi.on("tool_call", (event, ctx) => {
       if (event.toolName !== "bash" || !gitPushWrite(event.input)) return;
 
@@ -142,7 +211,9 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
       const target = decision.target ?? "an unresolved target";
       return {
         block: true,
-        reason: `Blocked git push targeting ${target}: ${decision.reason}.`,
+        reason:
+          `Blocked git push targeting ${target}: ${decision.reason}. ` +
+          "Use authorized_git_push with an explicit remote and refspecs to request standard OMP approval.",
       };
     });
   };
