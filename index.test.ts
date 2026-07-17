@@ -75,11 +75,15 @@ test("loads explicit local policy files", async () => {
 test("loads the stable local policy path when no environment override exists", async () => {
   const homeDirectory = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
   const path = `${homeDirectory}/.omp/agent/github-write-guard.json`;
+  const override = process.env.OMP_GITHUB_WRITE_GUARD_CONFIG;
   mkdirSync(`${homeDirectory}/.omp/agent`, { recursive: true });
   await Bun.write(path, JSON.stringify(policy));
+  delete process.env.OMP_GITHUB_WRITE_GUARD_CONFIG;
   try {
     expect(loadPolicy(undefined, homeDirectory)).toEqual(policy);
   } finally {
+    if (override === undefined) delete process.env.OMP_GITHUB_WRITE_GUARD_CONFIG;
+    else process.env.OMP_GITHUB_WRITE_GUARD_CONFIG = override;
     rmSync(homeDirectory, { recursive: true });
   }
 });

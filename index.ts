@@ -267,7 +267,8 @@ export function loadPolicy(
   path = process.env.OMP_GITHUB_WRITE_GUARD_CONFIG,
   homeDirectory = homedir(),
 ): GuardPolicy {
-  const policyPath = path || join(homeDirectory, ".omp", "agent", "github-write-guard.json");
+  const policyPath = path === undefined ? join(homeDirectory, ".omp", "agent", "github-write-guard.json") : path;
+  if (!policyPath) return DEFAULT_POLICY;
   try {
     const parsed: unknown = JSON.parse(readFileSync(policyPath, "utf8"));
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as GuardPolicy) : DEFAULT_POLICY;
