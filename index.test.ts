@@ -85,6 +85,24 @@ test("loads the stable local policy path when no environment override exists", a
     rmSync(homeDirectory, { recursive: true });
   }
 });
+test("ignores legacy plugin UI policy maps", async () => {
+  const homeDirectory = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const pluginSettingsPath = `${homeDirectory}/.omp/plugins/omp-plugins.lock.json`;
+  const override = process.env.OMP_GITHUB_WRITE_GUARD_CONFIG;
+  mkdirSync(`${homeDirectory}/.omp/plugins`, { recursive: true });
+  await Bun.write(
+    pluginSettingsPath,
+    JSON.stringify({ settings: { "omp-github-write-guard": { issueCreationPolicies: JSON.stringify(policy) } } }),
+  );
+  delete process.env.OMP_GITHUB_WRITE_GUARD_CONFIG;
+  try {
+    expect(loadPolicy(undefined, homeDirectory)).toEqual({});
+  } finally {
+    if (override === undefined) delete process.env.OMP_GITHUB_WRITE_GUARD_CONFIG;
+    else process.env.OMP_GITHUB_WRITE_GUARD_CONFIG = override;
+    rmSync(homeDirectory, { recursive: true });
+  }
+});
 
 test("prefers an explicit policy path over the stable local path", async () => {
   const homeDirectory = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
