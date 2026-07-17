@@ -123,6 +123,67 @@ test("confirms every external write individually", async () => {
   );
 });
 
+test("blocks duplicate external writes while a confirmation is pending", async () => {
+  let confirmations = 0;
+  let resolveConfirmation!: (confirmed: boolean) => void;
+  const handler = hookHandler();
+  const context = {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      confirm: () => {
+        confirmations++;
+        return new Promise<boolean>((resolve) => {
+          resolveConfirmation = resolve;
+        });
+      },
+    },
+  };
+  const event = { toolName: "github" as const, input: { op: "issue_create", repo: external } };
+
+  const first = handler(event, context);
+  const retry = await handler(event, context);
+  expect(retry).toMatchObject({ block: true, reason: expect.stringContaining("already pending") });
+  expect(confirmations).toBe(1);
+
+  resolveConfirmation(true);
+  expect(await first).toBeUndefined();
+  const next = handler(event, context);
+  expect(confirmations).toBe(2);
+  resolveConfirmation(true);
+  expect(await next).toBeUndefined();
+});
+
+test("clears pending confirmations after rejection or failure", async () => {
+  const handler = hookHandler();
+  const event = { toolName: "github" as const, input: { op: "issue_create", repo: external } };
+  let confirmations = 0;
+  let failConfirmation = false;
+  const context = {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      confirm: () => {
+        confirmations++;
+        if (failConfirmation) return Promise.reject(new Error("cancelled"));
+        return confirmations === 1 ? false : true;
+      },
+    },
+  };
+
+  expect(await handler(event, context)).toMatchObject({ block: true });
+  expect(await handler(event, context)).toBeUndefined();
+
+  failConfirmation = true;
+  expect(await handler(event, context)).toMatchObject({
+    block: true,
+    reason: expect.stringContaining("could not be completed"),
+  });
+  failConfirmation = false;
+  expect(await handler(event, context)).toBeUndefined();
+  expect(confirmations).toBe(4);
+});
+
 test("blocks external writes without an interactive approval", async () => {
   const result = await hookHandler()(
     { toolName: "github", input: { op: "pr_create", repo: external } },

@@ -208,6 +208,7 @@ export function currentCheckoutRepository(cwd: string): string | undefined {
 
 export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
   return function githubWriteGuard(pi: ExtensionAPI): void {
+    const pendingConfirmations = new Set<string>();
     pi.on("tool_call", async (event, ctx) => {
       if (event.toolName !== "bash" && event.toolName !== "write" && event.toolName !== "github") return;
 
@@ -225,16 +226,33 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
       const reason = `Blocked ${decision.action} targeting ${target}: ${decision.reason}.`;
       if (!decision.requiresConfirmation) return { block: true, reason };
 
-      const confirmed =
-        ctx.hasUI &&
-        (await ctx.ui.confirm(
-          "Choose GitHub write action",
-          `You are in ${currentRepository}. ${decision.action} will write to ${decision.target}. ` +
-            "Choose an option because this is a different project.",
-        ));
-      if (confirmed) return;
+      if (!ctx.hasUI) {
+        return { block: true, reason: `${reason} Explicit confirmation is required for this operation and target.` };
+      }
 
-      return { block: true, reason: `${reason} Explicit confirmation is required for this operation and target.` };
+      const confirmationKey = `${decision.action}\0${decision.target}`;
+      if (pendingConfirmations.has(confirmationKey)) {
+        return { block: true, reason: `${reason} An identical confirmation is already pending.` };
+      }
+
+      pendingConfirmations.add(confirmationKey);
+      try {
+        if (
+          await ctx.ui.confirm(
+            "Choose GitHub write action",
+            `You are in ${currentRepository}. ${decision.action} will write to ${decision.target}. ` +
+              "Choose an option because this is a different project.",
+          )
+        ) {
+          return;
+        }
+
+        return { block: true, reason: `${reason} Explicit confirmation is required for this operation and target.` };
+      } catch {
+        return { block: true, reason: `${reason} The confirmation could not be completed.` };
+      } finally {
+        pendingConfirmations.delete(confirmationKey);
+      }
     });
   };
 }
