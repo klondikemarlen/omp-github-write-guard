@@ -6,6 +6,10 @@ It resolves the current GitHub project from the checkout's `origin` remote. Writ
 
 There are no settings or policies.
 
+## Confirmation deadline
+
+OMP 17.0.2 ends extension handlers after 30 seconds. The guard cannot extend that host deadline, so a confirmation left open beyond it cannot authorize the original write. While that menu remains open, identical retries are blocked without opening another menu; resolve it, then retry to receive a fresh one-off choice. Host support for a confirmation that survives its handler deadline is required to remove this limitation.
+
 ## Install
 Install the public Git repository:
 
