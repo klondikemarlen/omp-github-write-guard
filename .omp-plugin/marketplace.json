@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "omp-github-write-guard",
-      "description": "Hard-block git pushes outside the current checkout.",
+      "description": "Route external Git pushes through OMP Ask authorization.",
       "source": "./",
       "category": "security",
       "tags": ["github", "safety", "omp"],
