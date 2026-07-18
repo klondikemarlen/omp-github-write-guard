@@ -1,10 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
+import { parse } from "shell-quote";
 
 type ToolInput = Record<string, unknown>;
 type GitPush = {
-  target?: string;
+  remote?: string;
+  directories: string[];
   requiresExplicitTarget?: boolean;
+  targetUnresolved?: boolean;
 };
 export type ToolCallEvent = { toolName: string; input: ToolInput };
 type ToolResultEvent = {
@@ -36,7 +39,7 @@ type AuthorizedGitPushTool = {
   label: string;
   description: string;
   parameters: unknown;
-  approval: "read";
+  approval: "exec";
   formatApprovalDetails(params: AuthorizedGitPushParams): string[];
   execute(
     toolCallId: string,
@@ -72,34 +75,157 @@ function normalizeRepository(value: unknown): string | undefined {
   return owner && repository ? `${owner}/${repository}`.toLowerCase() : undefined;
 }
 
-const GIT_PUSH_COMMAND =
-  /(?:^|&&|\|\||;|\||\n)\s*git(?<directories>(?:\s+-C\s+\S+)*)\s+push\b/;
+const SHELL_COMMAND_BOUNDARIES: Record<string, true> = {
+  "&&": true,
+  "||": true,
+  ";": true,
+  "|": true,
+  "|&": true,
+  "&": true,
+};
+const SHELL_REDIRECTIONS: Record<string, true> = {
+  "<": true,
+  ">": true,
+  ">>": true,
+  "<&": true,
+  ">&": true,
+  "<<<": true,
+};
+const GIT_PUSH_FLAGS: Record<string, true> = {
+  "-d": true,
+  "-f": true,
+  "-q": true,
+  "-u": true,
+  "-v": true,
+  "--all": true,
+  "--atomic": true,
+  "--delete": true,
+  "--dry-run": true,
+  "--follow-tags": true,
+  "--force": true,
+  "--force-if-includes": true,
+  "--force-with-lease": true,
+  "--mirror": true,
+  "--no-thin": true,
+  "--no-verify": true,
+  "--porcelain": true,
+  "--prune": true,
+  "--quiet": true,
+  "--set-upstream": true,
+  "--tags": true,
+  "--thin": true,
+  "--verbose": true,
+};
 
-function gitPushCwd(command: string, cwd: string): string {
-  const directories = command.match(GIT_PUSH_COMMAND)?.groups?.directories;
-  if (!directories) return cwd;
-
-  return [...directories.matchAll(/\s+-C\s+(\S+)/g)].reduce(
-    (currentCwd, [, directory]) => resolve(currentCwd, directory),
-    cwd,
-  );
+function shellCommands(command: string): (string | undefined)[][] {
+  const dynamic = {};
+  try {
+    const tokens = parse<typeof dynamic>(command, () => dynamic);
+    const commands: (string | undefined)[][] = [];
+    let words: (string | undefined)[] = [];
+    let discardNext = false;
+    for (const token of tokens) {
+      if (typeof token === "string") {
+        if (discardNext) discardNext = false;
+        else words.push(token);
+        continue;
+      }
+      if ("comment" in token) break;
+      if (!("op" in token) || token.op === "glob") {
+        if (discardNext) discardNext = false;
+        else words.push(undefined);
+        continue;
+      }
+      if (SHELL_COMMAND_BOUNDARIES[token.op]) {
+        if (words.length) commands.push(words);
+        words = [];
+        discardNext = false;
+      } else if (SHELL_REDIRECTIONS[token.op]) {
+        discardNext = true;
+      }
+    }
+    if (words.length) commands.push(words);
+    return commands;
+  } catch {
+    return [];
+  }
 }
 
-function gitPushRemote(command: string): string | undefined {
-  return command.match(
-    /(?:^|&&|\|\||;|\||\n)\s*git(?:\s+-C\s+\S+)*\s+push(?:\s+(?:-u|--set-upstream|--force-with-lease(?:=\S+)?|--force|--tags|--all|--mirror|--dry-run|--atomic))*\s+([^\s-][^\s]*)/,
-  )?.[1];
+function gitPushFromWords(words: (string | undefined)[]): GitPush | undefined {
+  let index = 0;
+  let hasEnvironmentPrefix = false;
+  while (
+    typeof words[index] === "string" &&
+    /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index])
+  ) {
+    hasEnvironmentPrefix = true;
+    index += 1;
+  }
+  if (words[index] !== "git") return undefined;
+
+  index += 1;
+  const directories: string[] = [];
+  while (words[index] !== "push") {
+    const word = words[index];
+    if (typeof word !== "string") return undefined;
+    if (word === "-C") {
+      const directory = words[index + 1];
+      if (typeof directory !== "string") {
+        return { directories, requiresExplicitTarget: true, targetUnresolved: true };
+      }
+      directories.push(directory);
+      index += 2;
+      continue;
+    }
+    if (word.startsWith("-C") && word.length > 2) {
+      directories.push(word.slice(2));
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("-")) {
+      return { directories, requiresExplicitTarget: true, targetUnresolved: true };
+    }
+    return undefined;
+  }
+
+  let remote: string | undefined;
+  for (index += 1; index < words.length; index += 1) {
+    const word = words[index];
+    if (typeof word !== "string" || word.startsWith("-") && !GIT_PUSH_FLAGS[word]) {
+      return { directories, requiresExplicitTarget: true, targetUnresolved: true };
+    }
+    if (!word.startsWith("-")) {
+      remote = word;
+      break;
+    }
+  }
+  return hasEnvironmentPrefix
+    ? { directories, requiresExplicitTarget: true, targetUnresolved: true }
+    : {
+        remote,
+        directories,
+        requiresExplicitTarget: !remote || (remote !== "origin" && !normalizeRepository(remote)),
+      };
 }
 
 function gitPushWrite(input: ToolInput): GitPush | undefined {
-  if (typeof input.command !== "string" || !GIT_PUSH_COMMAND.test(input.command)) return undefined;
+  if (typeof input.command !== "string") return undefined;
 
-  const remote = gitPushRemote(input.command);
-  const target = normalizeRepository(remote);
-  return {
-    target,
-    requiresExplicitTarget: !remote || (remote !== "origin" && !target),
-  };
+  const hasPotentialPush = /\bgit\b[\s\S]*\bpush\b/.test(input.command);
+  if (input.command.includes("\n") && hasPotentialPush) {
+    return { directories: [], requiresExplicitTarget: true, targetUnresolved: true };
+  }
+
+  const commands = shellCommands(input.command);
+  const pushes = commands
+    .map(gitPushFromWords)
+    .filter((push): push is GitPush => push !== undefined);
+  const hasDynamicPush = commands.some((words) => words.includes(undefined)) && hasPotentialPush;
+  if (pushes.length === 1 && !hasDynamicPush) return pushes[0];
+  if (pushes.length > 1 || hasDynamicPush) {
+    return { directories: [], requiresExplicitTarget: true, targetUnresolved: true };
+  }
+  return undefined;
 }
 
 export type GuardDecision =
@@ -120,9 +246,12 @@ export function guardDecision(
   const push = gitPushWrite(input);
   if (!push) return { allow: true };
 
-  const target = push.requiresExplicitTarget
-    ? push.target ?? resolvedPushTarget
-    : push.target ?? defaultRepository;
+  const directTarget = normalizeRepository(push.remote);
+  const target = push.targetUnresolved
+    ? undefined
+    : push.requiresExplicitTarget
+      ? directTarget ?? resolvedPushTarget
+      : directTarget ?? defaultRepository;
   const blocked = (reason: string): GuardDecision => ({
     allow: false,
     action: "git push",
@@ -139,17 +268,29 @@ export function guardDecision(
   return blocked(`the target differs from the current checkout (${currentRepository})`);
 }
 
-function gitRemoteRepository(cwd: string, remote: string, push = false): string | undefined {
+function gitCommandOutput(cwd: string, args: string[]): string | undefined {
   try {
-    return normalizeRepository(
-      execFileSync("git", ["-C", cwd, "remote", "get-url", ...(push ? ["--push"] : []), remote], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }),
-    );
+    return execFileSync("git", ["-C", cwd, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() || undefined;
   } catch {
     return undefined;
   }
+}
+
+function gitRemoteRepository(cwd: string, remote: string, push = false): string | undefined {
+  return normalizeRepository(gitCommandOutput(cwd, ["remote", "get-url", ...(push ? ["--push"] : []), remote]));
+}
+
+function defaultPushRemote(cwd: string): string {
+  const branch = gitCommandOutput(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  return (
+    (branch && gitCommandOutput(cwd, ["config", "--get", `branch.${branch}.pushRemote`])) ??
+    gitCommandOutput(cwd, ["config", "--get", "remote.pushDefault"]) ??
+    (branch && gitCommandOutput(cwd, ["config", "--get", `branch.${branch}.remote`])) ??
+    "origin"
+  );
 }
 
 export function currentCheckoutRepository(cwd: string): string | undefined {
@@ -206,7 +347,7 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
         refspecs: z.array(z.string()).optional(),
         cwd: z.string().optional(),
       }),
-      approval: "read",
+      approval: "exec",
       formatApprovalDetails: ({ remote, refspecs, cwd }) => {
         const target = normalizeRepository(remote) ?? (cwd && gitRemoteRepository(cwd, remote, true));
         return [
@@ -255,19 +396,20 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
       }
     });
     pi.on("tool_call", (event, ctx) => {
-      if (event.toolName !== "bash" || !gitPushWrite(event.input)) return;
+      const push = event.toolName === "bash" ? gitPushWrite(event.input) : undefined;
+      if (!push) return;
 
       const toolCwd = typeof event.input.cwd === "string" ? event.input.cwd : ctx.cwd;
-      const commandCwd =
-        typeof event.input.command === "string"
-          ? gitPushCwd(event.input.command, toolCwd)
-          : toolCwd;
-      const pushRemote = typeof event.input.command === "string" ? gitPushRemote(event.input.command) : undefined;
+      const commandCwd = push.directories.reduce(
+        (cwd, directory) => resolve(cwd, directory),
+        toolCwd,
+      );
+      const pushRemote = push.targetUnresolved ? undefined : (push.remote ?? defaultPushRemote(commandCwd));
       const currentRepository = currentCheckoutRepository(ctx.cwd);
       const resolvedPushTarget =
         pushRemote && !normalizeRepository(pushRemote)
           ? gitRemoteRepository(commandCwd, pushRemote, true)
-          : undefined;
+          : normalizeRepository(pushRemote);
       const defaultRepository =
         resolvedPushTarget ??
         (commandCwd === ctx.cwd ? currentRepository : currentCheckoutRepository(commandCwd));
@@ -285,7 +427,7 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
       if (!ctx.hasUI) {
         return { block: true, reason: `${reason} Interactive authorization requires OMP UI.` };
       }
-      if (pendingAuthorization || authorizedTarget) {
+      if (authorizedTarget) {
         return { block: true, reason: `${reason} An external push authorization is already pending.` };
       }
 

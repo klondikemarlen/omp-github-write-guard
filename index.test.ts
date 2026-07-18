@@ -13,7 +13,7 @@ const current = "klondikemarlen/omp-github-write-guard";
 const external = "elsewhere/example";
 
 type AuthorizedGitPush = {
-  approval: "read";
+  approval: "exec";
   formatApprovalDetails(params: { remote: string; refspecs?: string[]; cwd?: string }): string[];
   execute(
     toolCallId: string,
@@ -96,6 +96,48 @@ test("does not treat quoted git push text as a write", () => {
   expect(result).toBeUndefined();
 });
 
+test("classifies static shell pushes and blocks ambiguous commands", () => {
+  expect(
+    guardDecision({ command: `git --no-pager push git@github.com:${external}.git HEAD` }, current),
+  ).toMatchObject({ allow: false });
+  expect(
+    guardDecision({ command: `git -C/tmp push git@github.com:${external}.git HEAD` }, current),
+  ).toMatchObject({ allow: false, target: external });
+  expect(
+    guardDecision(
+      { command: `git -C "/tmp/directory with spaces" push git@github.com:${external}.git HEAD` },
+      current,
+    ),
+  ).toMatchObject({ allow: false, target: external });
+  expect(
+    guardDecision({ command: `TOKEN=value git push git@github.com:${external}.git HEAD` }, current),
+  ).toMatchObject({ allow: false });
+  expect(
+    guardDecision({ command: `bun -e 'console.log("git push git@github.com:${external}.git")'` }, current),
+  ).toEqual({ allow: true });
+  expect(
+    guardDecision(
+      { command: `git push origin && git push git@github.com:${external}.git HEAD` },
+      current,
+    ),
+  ).toMatchObject({ allow: false, target: undefined });
+  expect(
+    guardDecision({ command: `echo $(git push git@github.com:${external}.git HEAD)` }, current),
+  ).toMatchObject({ allow: false, target: undefined });
+  expect(
+    guardDecision(
+      { command: `git push origin && echo $(git push git@github.com:${external}.git HEAD)` },
+      current,
+    ),
+  ).toMatchObject({ allow: false, target: undefined });
+  expect(
+    guardDecision(
+      { command: `echo ok\ngit push git@github.com:${external}.git HEAD` },
+      current,
+    ),
+  ).toMatchObject({ allow: false, target: undefined });
+});
+
 test("steers external pushes to the default ask tool", () => {
   const messages: string[] = [];
   const { handler } = createGuard(undefined, (content) => messages.push(content));
@@ -116,6 +158,55 @@ test("steers external pushes to the default ask tool", () => {
   expect(messages).toHaveLength(1);
   expect(messages[0]).toContain('Call the ask tool now with one question: id "authorize_git_push"');
   expect(messages[0]).toContain(`Allow git push to ${external}?`);
+});
+
+test("resolves the configured target for an unqualified push", () => {
+  const repository = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  mkdirSync(repository, { recursive: true });
+  try {
+    execFileSync("git", ["init", repository]);
+    execFileSync("git", ["-C", repository, "remote", "add", "origin", `git@github.com:${current}.git`]);
+    const guard = createGuard();
+
+    expect(
+      guard.handler(
+        { toolName: "bash", input: { command: "git push", cwd: repository } },
+        { cwd: repository, hasUI: true },
+      ),
+    ).toBeUndefined();
+
+    const branch = execFileSync("git", ["-C", repository, "symbolic-ref", "--short", "HEAD"], {
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["-C", repository, "remote", "add", "upstream", `git@github.com:${external}.git`]);
+    execFileSync("git", ["-C", repository, "config", "remote.pushDefault", "upstream"]);
+    expect(
+      guard.handler(
+        { toolName: "bash", input: { command: "git push", cwd: repository } },
+        { cwd: repository, hasUI: false },
+      ),
+    ).toMatchObject({ block: true, reason: expect.stringContaining(external) });
+
+    execFileSync("git", ["-C", repository, "config", `branch.${branch}.pushRemote`, "origin"]);
+    expect(
+      guard.handler(
+        { toolName: "bash", input: { command: "git push", cwd: repository } },
+        { cwd: repository, hasUI: true },
+      ),
+    ).toBeUndefined();
+
+    execFileSync("git", ["-C", repository, "config", "--unset", `branch.${branch}.pushRemote`]);
+    execFileSync("git", ["-C", repository, "config", "--unset", "remote.pushDefault"]);
+    execFileSync("git", ["-C", repository, "config", `branch.${branch}.remote`, "upstream"]);
+    expect(
+      guard.handler(
+        { toolName: "bash", input: { command: "git push", cwd: repository } },
+        { cwd: repository, hasUI: false },
+      ),
+    ).toMatchObject({ block: true, reason: expect.stringContaining(external) });
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
 });
 
 test("executes exactly one push after the matching ask approval", async () => {
@@ -141,7 +232,7 @@ test("executes exactly one push after the matching ask approval", async () => {
       ),
     ).toMatchObject({ block: true });
     expect(messages).toHaveLength(1);
-    expect(guard.authorizedGitPush.approval).toBe("read");
+    expect(guard.authorizedGitPush.approval).toBe("exec");
     expect(
       guard.authorizedGitPush.formatApprovalDetails({
         remote: "origin",
@@ -258,6 +349,29 @@ test("does not authorize a rejected ask or headless push", async () => {
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
+});
+
+test("retries authorization after an unrelated Ask result", () => {
+  const messages: string[] = [];
+  const guard = createGuard(undefined, (content) => messages.push(content));
+  const event = {
+    toolName: "bash",
+    input: { command: `git push git@github.com:${external}.git HEAD` },
+  };
+  const context = { cwd: process.cwd(), hasUI: true };
+
+  expect(guard.handler(event, context)).toMatchObject({ block: true });
+  guard.resultHandler(
+    {
+      toolName: "ask",
+      input: { questions: [{ id: "unrelated", question: "Continue?" }] },
+      details: { selectedOptions: ["Continue"] },
+      isError: false,
+    },
+    context,
+  );
+  expect(guard.handler(event, context)).toMatchObject({ block: true });
+  expect(messages).toHaveLength(2);
 });
 
 test("hard-blocks unresolved checkouts and targets", () => {
