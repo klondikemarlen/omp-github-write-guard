@@ -1,7 +1,7 @@
 {
   "name": "omp-github-write-guard",
-  "version": "0.2.0",
-  "description": "Opt-in OMP authorization guard for git pushes outside the current checkout.",
+  "version": "0.3.0",
+  "description": "Opt-in OMP Ask authorization for Git pushes outside the current checkout.",
   "type": "module",
   "scripts": {
     "test": "bun test",
@@ -18,5 +18,8 @@
   },
   "pi": {
     "extensions": ["./index.ts"]
+  },
+  "dependencies": {
+    "shell-quote": "^1.10.0"
   }
 }
