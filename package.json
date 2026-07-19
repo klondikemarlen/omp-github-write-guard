@@ -1,7 +1,7 @@
 {
   "name": "omp-github-write-guard",
-  "version": "0.3.0",
-  "description": "Retired no-op compatibility package for OMP GitHub write guard users.",
+  "version": "0.4.0",
+  "description": "Opt-in OMP confirmation guard for external GitHub pushes and issue creation.",
   "type": "module",
   "scripts": {
     "test": "bun test",
@@ -18,5 +18,8 @@
   },
   "pi": {
     "extensions": ["./index.ts"]
+  },
+  "dependencies": {
+    "shell-quote": "^1.10.0"
   }
 }
