@@ -299,6 +299,11 @@ function isApproved(details: unknown): boolean {
   );
 }
 
+function authorizationKey(action: GitHubWrite["action"], target: string, input: ToolInput): string {
+  const entries = Object.entries(input).sort(([left], [right]) => left.localeCompare(right));
+  return `${action}\u0000${target}\u0000${JSON.stringify(entries)}`;
+}
+
 export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
   return (pi) => {
     let pending: { action: GitHubWrite["action"]; target: string; key: string } | undefined;
@@ -342,10 +347,13 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
         };
       }
 
-      const key = `${decision.action}\u0000${target}`;
-      if (authorizedKey === key) {
+      const key = authorizationKey(decision.action, target, event.input);
+      if (authorizedKey) {
+        if (authorizedKey === key) {
+          authorizedKey = undefined;
+          return;
+        }
         authorizedKey = undefined;
-        return;
       }
       if (pending) {
         return { block: true, reason: `${reason} A confirmation is already pending.` };

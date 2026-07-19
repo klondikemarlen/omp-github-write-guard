@@ -157,6 +157,24 @@ test("permits exactly one approved external push retry", async () => {
   }
 });
 
+test("requires a new confirmation when an approved push changes", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    const original = { toolName: "bash", input: { command: `git push https://github.com/${external}.git HEAD` } };
+    const changed = { toolName: "bash", input: { command: `git push --force https://github.com/${external}.git HEAD` } };
+    expect(await instance.handler(original, context(repository))).toMatchObject({ block: true });
+    approve(instance, "git push", external);
+    expect(await instance.handler(changed, context(repository))).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("OMP ask"),
+    });
+    expect(instance.messages).toHaveLength(2);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("clears an interrupted or mismatched confirmation", async () => {
   const repository = checkout();
   try {
