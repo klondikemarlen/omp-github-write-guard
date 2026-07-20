@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
+import { relative } from "node:path";
 
 import {
   createGitHubWriteGuard,
@@ -56,11 +57,27 @@ function approve(guard: Guard, action: string, target: string, detail = "") {
   });
 }
 
-test("resolves the checkout origin", () => {
+test("resolves nested checkout origins", () => {
   const repository = checkout();
+  const nested = `${repository}/nested`;
   try {
+    mkdirSync(nested);
     expect(currentCheckoutRepository(repository)).toBe(current);
+    expect(currentCheckoutRepository(nested)).toBe(current);
   } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("resolves worktree origins", () => {
+  const repository = checkout();
+  const worktree = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  try {
+    execFileSync("git", ["-C", repository, "-c", "user.name=Guard", "-c", "user.email=guard@example.test", "commit", "--allow-empty", "-m", "initial"]);
+    execFileSync("git", ["-C", repository, "worktree", "add", worktree, "-b", "feature"]);
+    expect(currentCheckoutRepository(worktree)).toBe(current);
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
     rmSync(repository, { recursive: true, force: true });
   }
 });
@@ -75,6 +92,55 @@ test("does not intercept same-origin pushes", async () => {
     );
     expect(result).toBeUndefined();
     expect(instance.messages).toEqual([]);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("uses the command checkout identity and fails closed only without a target", () => {
+  const repository = checkout();
+  const otherCheckout = checkout(`git@github.com:${external}.git`);
+  const unresolved = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  mkdirSync(unresolved);
+  try {
+    const otherFromRepository = relative(repository, otherCheckout);
+    expect(
+      githubWriteHandoff(
+        { toolName: "bash", input: { command: "git -C . push origin HEAD", cwd: otherFromRepository } },
+        repository,
+      ),
+    ).toMatchObject({ decision: "allow", currentRepository: external, target: external });
+    expect(
+      githubWriteHandoff({ toolName: "bash", input: { command: "gh pr create", cwd: otherFromRepository } }, repository),
+    ).toMatchObject({ decision: "allow", currentRepository: external, target: external });
+    expect(
+      githubWriteHandoff(
+        { toolName: "bash", input: { command: `cd ${otherFromRepository} && gh pr create` } },
+        repository,
+      ),
+    ).toMatchObject({ decision: "allow", currentRepository: external, target: external });
+    expect(
+      githubWriteHandoff(
+        { toolName: "bash", input: { command: `gh pr create --repo ${external}`, cwd: unresolved } },
+        repository,
+      ),
+    ).toMatchObject({ decision: "ask", target: external });
+  } finally {
+    rmSync(unresolved, { recursive: true, force: true });
+    rmSync(otherCheckout, { recursive: true, force: true });
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("requires named push remotes to resolve through Git configuration", () => {
+  const repository = checkout();
+  try {
+    expect(
+      githubWriteHandoff(
+        { toolName: "bash", input: { command: `git push ${external} HEAD` } },
+        repository,
+      ),
+    ).toMatchObject({ decision: "block", action: "git push", reason: expect.stringContaining("cannot be resolved") });
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -167,6 +233,52 @@ test("permits exactly one approved external push retry", async () => {
     expect(await instance.handler(event, context(repository))).toBeUndefined();
     expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
   } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("retries a relative checkout change after an approved push", async () => {
+  const repository = checkout();
+  const otherCheckout = checkout("https://github.com/elsewhere/other.git");
+  try {
+    const instance = guard();
+    const event = {
+      toolName: "bash",
+      input: {
+        command: `cd ${relative(repository, otherCheckout)} && git push https://github.com/${external}.git HEAD`,
+      },
+    };
+    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+    approve(instance, "git push", external, `\nCommand: ${event.input.command}`);
+    expect(await instance.handler(event, context(repository))).toBeUndefined();
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: "git push origin HEAD" } },
+      context(repository),
+    )).toBeUndefined();
+    expect(instance.messages).toHaveLength(1);
+  } finally {
+    rmSync(otherCheckout, { recursive: true, force: true });
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("does not carry pending or approved writes across session directories", async () => {
+  const repository = checkout();
+  const sibling = checkout();
+  const event = { toolName: "bash", input: { command: `git push https://github.com/${external}.git HEAD` } };
+  try {
+    const pending = guard();
+    expect(await pending.handler(event, context(repository))).toMatchObject({ block: true });
+    expect(await pending.handler(event, context(sibling))).toMatchObject({ block: true, reason: expect.stringContaining("OMP ask") });
+    expect(pending.messages).toHaveLength(2);
+
+    const approved = guard();
+    expect(await approved.handler(event, context(repository))).toMatchObject({ block: true });
+    approve(approved, "git push", external, `\nCommand: ${event.input.command}`);
+    expect(await approved.handler(event, context(sibling))).toMatchObject({ block: true, reason: expect.stringContaining("OMP ask") });
+    expect(approved.messages).toHaveLength(2);
+  } finally {
+    rmSync(sibling, { recursive: true, force: true });
     rmSync(repository, { recursive: true, force: true });
   }
 });
@@ -300,7 +412,7 @@ test("does not prompt same-origin issue creation", async () => {
   }
 });
 
-test("does not intercept draft pull requests or same-origin force-with-lease delivery", async () => {
+test("guards repository-scoped pull request and API writes", async () => {
   const repository = checkout();
   try {
     const instance = guard();
@@ -312,14 +424,51 @@ test("does not intercept draft pull requests or same-origin force-with-lease del
         },
         context(repository),
       ),
-    ).toBeUndefined();
+    ).toMatchObject({ block: true, reason: expect.stringContaining("GitHub pull request creation") });
+    expect(instance.messages).toHaveLength(1);
+
     expect(
-      await instance.handler(
-        { toolName: "bash", input: { command: "git push --force-with-lease origin HEAD" } },
-        context(repository),
+      githubWriteHandoff(
+        { toolName: "bash", input: { command: `gh pr merge https://github.com/${external}/pull/1` } },
+        repository,
       ),
-    ).toBeUndefined();
-    expect(instance.messages).toEqual([]);
+    ).toMatchObject({ decision: "ask", action: "GitHub pull request update", target: external });
+    expect(
+      githubWriteHandoff(
+        { toolName: "bash", input: { command: `gh api -XPOST repos/${external}/issues` } },
+        repository,
+      ),
+    ).toMatchObject({ decision: "ask", action: "GitHub API write", target: external });
+    expect(
+      githubWriteHandoff(
+        { toolName: "bash", input: { command: `gh pr close 1 --repo ${external}` } },
+        repository,
+      ),
+    ).toMatchObject({ decision: "ask", action: "GitHub pull request update", target: external });
+    expect(
+      githubWriteHandoff(
+        { toolName: "bash", input: { command: `gh issue lock 1 --repo ${external}` } },
+        repository,
+      ),
+    ).toMatchObject({ decision: "ask", action: "GitHub issue update", target: external });
+    expect(
+      githubWriteHandoff(
+        { toolName: "bash", input: { command: `gh api repos/${external}/issues` } },
+        repository,
+      ),
+    ).toEqual({ decision: "allow" });
+    expect(
+      githubWriteHandoff(
+        { toolName: "write", input: { path: "xd://github", content: JSON.stringify({ op: "pr_push", pr: 1 }) } },
+        repository,
+      ),
+    ).toMatchObject({ decision: "block", action: "GitHub pull request update" });
+    expect(
+      githubWriteHandoff(
+        { toolName: "write", input: { path: "xd://github", content: JSON.stringify({ op: "unknown_write" }) } },
+        repository,
+      ),
+    ).toMatchObject({ decision: "block", action: "GitHub device request" });
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

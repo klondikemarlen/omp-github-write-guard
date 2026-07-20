@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, resolve } from "node:path";
 import { parse } from "shell-quote";
 
 type ToolInput = Record<string, unknown>;
 type GitHubWrite = {
-  action: "git push" | "GitHub issue creation";
+  action: string;
   target?: string;
   targetUnresolved?: boolean;
   directories?: string[];
@@ -35,7 +36,7 @@ export type GitHubWriteHandoff =
   | {
       decision: "ask";
       action: GitHubWrite["action"];
-      currentRepository: string;
+      currentRepository?: string;
       target: string;
       fingerprint: string;
       ask: AskPayload;
@@ -97,6 +98,46 @@ const GIT_PUSH_FLAGS = new Set([
 const GIT_GLOBAL_FLAGS = new Set(["-P", "--no-pager", "--paginate"]);
 const GIT_GLOBAL_OPTIONS_WITH_ARGUMENT = new Set(["-c", "--config"]);
 
+const GITHUB_CLI_WRITE_OPERATIONS: Record<string, { action: string; title?: string }> = {
+  "issue create": { action: "GitHub issue creation", title: "Issue title" },
+  "issue edit": { action: "GitHub issue update" },
+  "issue close": { action: "GitHub issue update" },
+  "issue reopen": { action: "GitHub issue update" },
+  "issue delete": { action: "GitHub issue update" },
+  "issue comment": { action: "GitHub issue update" },
+  "issue lock": { action: "GitHub issue update" },
+  "issue unlock": { action: "GitHub issue update" },
+  "issue pin": { action: "GitHub issue update" },
+  "issue unpin": { action: "GitHub issue update" },
+  "pr create": { action: "GitHub pull request creation", title: "Pull request title" },
+  "pr edit": { action: "GitHub pull request update" },
+  "pr merge": { action: "GitHub pull request update" },
+  "pr close": { action: "GitHub pull request update" },
+  "pr reopen": { action: "GitHub pull request update" },
+  "pr comment": { action: "GitHub pull request update" },
+  "pr review": { action: "GitHub pull request update" },
+  "pr ready": { action: "GitHub pull request update" },
+  "pr lock": { action: "GitHub pull request update" },
+  "pr unlock": { action: "GitHub pull request update" },
+};
+const GITHUB_DEVICE_READ_OPERATIONS = new Set([
+  "pr_checkout",
+  "repo_view",
+  "run_watch",
+  "search_code",
+  "search_commits",
+  "search_issues",
+  "search_prs",
+  "search_repos",
+]);
+const GITHUB_DEVICE_WRITE_OPERATIONS: Record<string, { action: string; title?: string; requiresTarget?: boolean }> = {
+  issue_create: { action: "GitHub issue creation", title: "Issue title" },
+  issue_comment: { action: "GitHub issue update" },
+  pr_create: { action: "GitHub pull request creation", title: "Pull request title" },
+  pr_comment: { action: "GitHub pull request update" },
+  pr_push: { action: "GitHub pull request update", requiresTarget: true },
+};
+
 function normalizeRepository(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
 
@@ -108,6 +149,40 @@ function normalizeRepository(value: unknown): string | undefined {
   const repository = match?.[2];
 
   return owner && repository ? `${owner}/${repository}`.toLowerCase() : undefined;
+}
+
+function githubRepositoryFromRemoteUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+
+  const match = value
+    .trim()
+    .replace(/\.git$/, "")
+    .match(/^(?:git@github\.com:|(?:git\+)?https?:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/\s]+)\/([^/\s]+)$/i);
+  return match ? `${match[1]}/${match[2]}`.toLowerCase() : undefined;
+}
+
+function unquoteDirectory(directory: string): string | undefined {
+  if (directory.startsWith("'") && directory.endsWith("'")) return directory.slice(1, -1);
+  if (directory.startsWith('"') && directory.endsWith('"')) return directory.slice(1, -1);
+  return /^[^\s;&|]+$/.test(directory) ? directory : undefined;
+}
+
+function commandDirectory(command: string, cwd: string): string | undefined {
+  const directory = command.match(/^\s*cd(?:\s+--)?\s+((?:'[^']*'|"[^"]*"|[^\s;&|]+))\s*(?:&&|;|\n)/)?.[1];
+  const parsed = directory && unquoteDirectory(directory);
+  if (!parsed) return undefined;
+  const expanded = parsed === "~" || parsed.startsWith("~/") ? `${homedir()}${parsed.slice(1)}` : parsed;
+  return resolve(cwd, expanded);
+}
+
+function toolDirectory(input: ToolInput, sessionCwd: string): string | undefined {
+  if (typeof input.cwd === "string" && input.cwd.trim()) {
+    const directory = input.cwd.trim();
+    const expanded = directory === "~" || directory.startsWith("~/") ? `${homedir()}${directory.slice(1)}` : directory;
+    return isAbsolute(expanded) ? expanded : resolve(sessionCwd, expanded);
+  }
+
+  return typeof input.command === "string" ? commandDirectory(input.command, sessionCwd) : undefined;
 }
 
 function shellCommands(command: string): (string | undefined)[][] {
@@ -197,7 +272,103 @@ function gitPushFromWords(words: (string | undefined)[]): GitHubWrite | undefine
   return { action: "git push", directories, remote };
 }
 
-function issueCreateFromWords(words: (string | undefined)[]): GitHubWrite | undefined {
+function repositoryFromReference(value: unknown): string | undefined {
+  const repository = normalizeRepository(value);
+  if (repository || typeof value !== "string") return repository;
+
+  const match = value.match(/github\.com[/:]([^/\s]+)\/([^/\s]+)/i);
+  return match ? normalizeRepository(`${match[1]}/${match[2]}`) : undefined;
+}
+
+function targetFromWords(words: (string | undefined)[], index: number, title?: string) {
+  let target: string | undefined;
+  let targetUnresolved = false;
+  let description: string | undefined;
+
+  for (; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "--repo" || word === "-R") {
+      const repository = words[index + 1];
+      if (typeof repository !== "string" || repository.startsWith("-")) {
+        targetUnresolved = true;
+      } else {
+        target = normalizeRepository(repository);
+        targetUnresolved ||= !target;
+      }
+      index += 1;
+      continue;
+    }
+    if (typeof word === "string" && (word.startsWith("--repo=") || word.startsWith("-R="))) {
+      target = normalizeRepository(word.slice(word.indexOf("=") + 1));
+      targetUnresolved ||= !target;
+      continue;
+    }
+    if (word === "--title" || word === "-t") {
+      const value = words[index + 1];
+      if (title && typeof value === "string" && !value.startsWith("-")) description = `${title}: ${value}`;
+      index += 1;
+      continue;
+    }
+    if (typeof word === "string" && (word.startsWith("--title=") || word.startsWith("-t="))) {
+      if (title) description = `${title}: ${word.slice(word.indexOf("=") + 1)}`;
+      continue;
+    }
+    target ||= repositoryFromReference(word);
+  }
+  return { target, targetUnresolved, description };
+}
+
+function repositoryFromApiPath(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+
+  const match = value.match(/(?:^|\/)repos\/([^/\s]+)\/([^/?\s]+)/i);
+  return match ? normalizeRepository(`${match[1]}/${match[2]}`) : undefined;
+}
+
+function githubApiWriteFromWords(words: (string | undefined)[], index: number): GitHubWrite | undefined {
+  const targetInfo = targetFromWords(words, index);
+  let target = targetInfo.target;
+  let targetUnresolved = targetInfo.targetUnresolved;
+  let method = "GET";
+  let methodUnresolved = false;
+  let hasFields = false;
+
+  for (; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "--method" || word === "-X") {
+      const value = words[index + 1];
+      if (typeof value === "string") method = value.toUpperCase();
+      else methodUnresolved = true;
+      index += 1;
+      continue;
+    }
+    if (typeof word === "string" && (word.startsWith("--method=") || word.startsWith("-X"))) {
+      method = (word.startsWith("--method=") ? word.slice(word.indexOf("=") + 1) : word.slice(2)).toUpperCase();
+      continue;
+    }
+    if (
+      word === "--raw-field" ||
+      word === "-f" ||
+      word === "--field" ||
+      word === "-F" ||
+      word === "--input" ||
+      (typeof word === "string" &&
+        (word.startsWith("--raw-field=") || word.startsWith("--field=") || word.startsWith("-f") || word.startsWith("-F")))
+    ) {
+      hasFields = true;
+    }
+    target ||= repositoryFromApiPath(word);
+  }
+
+  if (!methodUnresolved && method === "GET" && !hasFields) return undefined;
+  return {
+    action: "GitHub API write",
+    target,
+    targetUnresolved: targetUnresolved || !target,
+  };
+}
+
+function githubWriteFromWords(words: (string | undefined)[]): GitHubWrite | undefined {
   let index = 0;
   while (
     typeof words[index] === "string" &&
@@ -205,42 +376,16 @@ function issueCreateFromWords(words: (string | undefined)[]): GitHubWrite | unde
   ) {
     index += 1;
   }
-  if (words[index] !== "gh" || words[index + 1] !== "issue" || words[index + 2] !== "create") {
-    return undefined;
-  }
+  if (words[index] !== "gh") return undefined;
+  if (words[index + 1] === "api") return githubApiWriteFromWords(words, index + 2);
 
-  let target: string | undefined;
-  let description: string | undefined;
-  for (index += 3; index < words.length; index += 1) {
-    const word = words[index];
-    if (word === "--repo" || word === "-R") {
-      const repository = words[index + 1];
-      if (typeof repository !== "string" || repository.startsWith("-")) {
-        return { action: "GitHub issue creation", targetUnresolved: true };
-      }
-      target = normalizeRepository(repository);
-      if (!target) return { action: "GitHub issue creation", targetUnresolved: true };
-      index += 1;
-      continue;
-    }
-    if (typeof word === "string" && (word.startsWith("--repo=") || word.startsWith("-R="))) {
-      target = normalizeRepository(word.slice(word.indexOf("=") + 1));
-      if (!target) return { action: "GitHub issue creation", targetUnresolved: true };
-      continue;
-    }
-    if (word === "--title" || word === "-t") {
-      const title = words[index + 1];
-      if (typeof title === "string" && !title.startsWith("-")) {
-        description = title;
-        index += 1;
-      }
-      continue;
-    }
-    if (typeof word === "string" && (word.startsWith("--title=") || word.startsWith("-t="))) {
-      description = word.slice(word.indexOf("=") + 1);
-    }
-  }
-  return { action: "GitHub issue creation", target, description };
+  const operation = GITHUB_CLI_WRITE_OPERATIONS[`${words[index + 1]} ${words[index + 2]}`];
+  if (!operation) return undefined;
+
+  return {
+    action: operation.action,
+    ...targetFromWords(words, index + 3, operation.title),
+  };
 }
 
 function bashGitHubWrite(input: ToolInput): GitHubWrite | undefined {
@@ -248,27 +393,34 @@ function bashGitHubWrite(input: ToolInput): GitHubWrite | undefined {
 
   const commands = shellCommands(input.command);
   const writes = commands
-    .map((words) => gitPushFromWords(words) ?? issueCreateFromWords(words))
+    .map((words) => gitPushFromWords(words) ?? githubWriteFromWords(words))
     .filter((write): write is GitHubWrite => write !== undefined);
   if (writes.length === 1) return writes[0];
-  if (writes.length > 1) return { action: "git push", targetUnresolved: true };
+  if (writes.length > 1) return { action: "GitHub write", targetUnresolved: true };
   return undefined;
 }
 
-function githubDeviceIssueCreate(input: ToolInput): GitHubWrite | undefined {
+function githubDeviceWrite(input: ToolInput): GitHubWrite | undefined {
   if (input.path !== "xd://github" || typeof input.content !== "string") return undefined;
   try {
-    const request = JSON.parse(input.content) as { op?: unknown; repo?: unknown; title?: unknown };
-    if (request.op !== "issue_create") return undefined;
-    const target = normalizeRepository(request.repo);
+    const request = JSON.parse(input.content) as Record<string, unknown>;
+    if (typeof request.op !== "string") return { action: "GitHub device request", targetUnresolved: true };
+    if (GITHUB_DEVICE_READ_OPERATIONS.has(request.op)) return undefined;
+
+    const operation = GITHUB_DEVICE_WRITE_OPERATIONS[request.op];
+    if (!operation) return { action: "GitHub device request", targetUnresolved: true };
+
+    const target = repositoryFromReference(request.repo) ?? repositoryFromReference(request.pr);
+    const hasTarget = request.repo !== undefined || request.pr !== undefined;
     return {
-      action: "GitHub issue creation",
+      action: operation.action,
       target,
-      targetUnresolved: !target,
-      description: typeof request.title === "string" ? request.title : undefined,
+      targetUnresolved: (hasTarget && !target) || (operation.requiresTarget && !target),
+      description:
+        operation.title && typeof request.title === "string" ? `${operation.title}: ${request.title}` : undefined,
     };
   } catch {
-    return undefined;
+    return { action: "GitHub device request", targetUnresolved: true };
   }
 }
 
@@ -309,7 +461,7 @@ function gitCommandOutput(cwd: string, args: string[]): string | undefined {
 }
 
 function gitRemoteRepository(cwd: string, remote: string): string | undefined {
-  return normalizeRepository(gitCommandOutput(cwd, ["remote", "get-url", "--push", remote]));
+  return githubRepositoryFromRemoteUrl(gitCommandOutput(cwd, ["remote", "get-url", "--push", remote]));
 }
 
 function defaultPushRemote(cwd: string): string {
@@ -323,12 +475,13 @@ function defaultPushRemote(cwd: string): string {
 }
 
 export function currentCheckoutRepository(cwd: string): string | undefined {
-  return normalizeRepository(gitCommandOutput(cwd, ["remote", "get-url", "origin"]));
+  const root = gitCommandOutput(cwd, ["rev-parse", "--show-toplevel"]);
+  return root ? githubRepositoryFromRemoteUrl(gitCommandOutput(root, ["remote", "get-url", "origin"])) : undefined;
 }
 
 function writeFor(event: ToolCallEvent): GitHubWrite | undefined {
   if (event.toolName === "bash") return bashGitHubWrite(event.input);
-  if (event.toolName === "write") return githubDeviceIssueCreate(event.input);
+  if (event.toolName === "write") return githubDeviceWrite(event.input);
   return undefined;
 }
 
@@ -337,8 +490,8 @@ const APPROVE_WRITE = "Approve";
 
 function confirmationQuestion(write: GitHubWrite, target: string, input: ToolInput): string {
   const description =
-    write.description ? `\nIssue title: ${write.description}` :
-    write.action === "git push" && typeof input.command === "string" ? `\nCommand: ${input.command}` :
+    write.description ? `\n${write.description}` :
+    typeof input.command === "string" ? `\nCommand: ${input.command}` :
     "";
   return `Allow one ${write.action} to ${target}?${description}`;
 }
@@ -368,39 +521,42 @@ function isApproved(details: unknown): boolean {
   );
 }
 
-function authorizationKey(action: GitHubWrite["action"], target: string, input: ToolInput): string {
+function authorizationKey(action: GitHubWrite["action"], target: string, input: ToolInput, context: string): string {
   const entries = Object.entries(input).sort(([left], [right]) => left.localeCompare(right));
-  return `${action}\u0000${target}\u0000${JSON.stringify(entries)}`;
+  return `${action}\u0000${target}\u0000${context}\u0000${JSON.stringify(entries)}`;
 }
 
-export function githubWriteHandoff(event: ToolCallEvent, cwd: string): GitHubWriteHandoff {
+export function githubWriteHandoff(
+  event: ToolCallEvent,
+  cwd: string,
+  activeDirectory = cwd,
+): GitHubWriteHandoff {
   const write = writeFor(event);
   if (!write) return { decision: "allow" };
 
-  const toolCwd = typeof event.input.cwd === "string" ? event.input.cwd : cwd;
+  const toolCwd = toolDirectory(event.input, activeDirectory) ?? activeDirectory;
   const commandCwd =
     write.directories?.reduce((directoryCwd, directory) => resolve(directoryCwd, directory), toolCwd) ??
     toolCwd;
   if (write.action === "git push" && !write.targetUnresolved) {
     const remote = write.remote ?? defaultPushRemote(commandCwd);
-    write.target = normalizeRepository(remote) ?? gitRemoteRepository(commandCwd, remote);
+    write.target = githubRepositoryFromRemoteUrl(remote) ?? gitRemoteRepository(commandCwd, remote);
     write.targetUnresolved = !write.target;
   }
-  if (write.action === "GitHub issue creation" && !write.target) {
-    write.target = currentCheckoutRepository(toolCwd);
+  if (write.action !== "git push" && !write.target && !write.targetUnresolved) {
+    write.target = currentCheckoutRepository(commandCwd);
   }
 
-  const currentRepository = currentCheckoutRepository(cwd);
+  const currentRepository = currentCheckoutRepository(commandCwd);
   const decision = guardDecision(write, currentRepository);
   if (decision.allow) return { decision: "allow", action: write.action, currentRepository, target: write.target };
 
   const target = decision.target;
-  if (!currentRepository || !target) {
+  if (!target) {
     return {
       decision: "block",
       action: decision.action,
       currentRepository,
-      target,
       reason: decision.reason,
     };
   }
@@ -411,7 +567,7 @@ export function githubWriteHandoff(event: ToolCallEvent, cwd: string): GitHubWri
     action: decision.action,
     currentRepository,
     target,
-    fingerprint: authorizationKey(decision.action, target, event.input),
+    fingerprint: authorizationKey(decision.action, target, event.input, currentRepository ?? commandCwd),
     ask: {
       questions: [
         {
@@ -437,6 +593,8 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
   return (pi) => {
     let pending: { key: string; question: string } | undefined;
     let authorizedKey: string | undefined;
+    let activeDirectory: string | undefined;
+    let sessionDirectory: string | undefined;
 
     pi.on("tool_result", (event) => {
       if (event.toolName !== "ask" || !pending) return;
@@ -449,8 +607,19 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
     });
 
     pi.on("tool_call", (event, ctx) => {
-      const handoff = githubWriteHandoff(event, ctx.cwd);
-      if (handoff.decision === "allow") return;
+      if (sessionDirectory !== ctx.cwd) {
+        sessionDirectory = ctx.cwd;
+        activeDirectory = ctx.cwd;
+        pending = undefined;
+        authorizedKey = undefined;
+      }
+      const baseDirectory = activeDirectory ?? ctx.cwd;
+      const nextDirectory = event.toolName === "bash" ? toolDirectory(event.input, baseDirectory) : undefined;
+      const handoff = githubWriteHandoff(event, ctx.cwd, baseDirectory);
+      if (handoff.decision === "allow") {
+        if (nextDirectory) activeDirectory = nextDirectory;
+        return;
+      }
 
       if (handoff.decision === "block") {
         return {
@@ -466,6 +635,7 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
       if (authorizedKey) {
         if (authorizedKey === handoff.fingerprint) {
           authorizedKey = undefined;
+          if (nextDirectory) activeDirectory = nextDirectory;
           return;
         }
         authorizedKey = undefined;
