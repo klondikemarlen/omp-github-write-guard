@@ -262,6 +262,49 @@ test("retries a relative checkout change after an approved push", async () => {
   }
 });
 
+test("resolves each relative tool cwd from the session checkout", async () => {
+  const repository = checkout();
+  try {
+    mkdirSync(`${repository}/web`);
+    mkdirSync(`${repository}/api`);
+    const instance = guard();
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: "git status --short", cwd: "web" } },
+      context(repository),
+    )).toBeUndefined();
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: "git status --short", cwd: "api" } },
+      context(repository),
+    )).toBeUndefined();
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: "git push origin HEAD" } },
+      context(repository),
+    )).toBeUndefined();
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("does not retain an explicit tool cwd for later writes", async () => {
+  const repository = checkout();
+  const otherCheckout = checkout(`https://github.com/${external}.git`);
+  try {
+    const instance = guard();
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: "git status --short", cwd: otherCheckout } },
+      context(repository),
+    )).toBeUndefined();
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: `gh issue create --repo ${current}` } },
+      context(repository),
+    )).toBeUndefined();
+    expect(instance.messages).toHaveLength(0);
+  } finally {
+    rmSync(otherCheckout, { recursive: true, force: true });
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("does not carry pending or approved writes across session directories", async () => {
   const repository = checkout();
   const sibling = checkout();

@@ -175,14 +175,14 @@ function commandDirectory(command: string, cwd: string): string | undefined {
   return resolve(cwd, expanded);
 }
 
-function toolDirectory(input: ToolInput, sessionCwd: string): string | undefined {
+function toolDirectory(input: ToolInput, sessionCwd: string, commandCwd = sessionCwd): string | undefined {
   if (typeof input.cwd === "string" && input.cwd.trim()) {
     const directory = input.cwd.trim();
     const expanded = directory === "~" || directory.startsWith("~/") ? `${homedir()}${directory.slice(1)}` : directory;
     return isAbsolute(expanded) ? expanded : resolve(sessionCwd, expanded);
   }
 
-  return typeof input.command === "string" ? commandDirectory(input.command, sessionCwd) : undefined;
+  return typeof input.command === "string" ? commandDirectory(input.command, commandCwd) : undefined;
 }
 
 function shellCommands(command: string): (string | undefined)[][] {
@@ -534,7 +534,7 @@ export function githubWriteHandoff(
   const write = writeFor(event);
   if (!write) return { decision: "allow" };
 
-  const toolCwd = toolDirectory(event.input, activeDirectory) ?? activeDirectory;
+  const toolCwd = toolDirectory(event.input, cwd, activeDirectory) ?? activeDirectory;
   const commandCwd =
     write.directories?.reduce((directoryCwd, directory) => resolve(directoryCwd, directory), toolCwd) ??
     toolCwd;
@@ -614,7 +614,10 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
         authorizedKey = undefined;
       }
       const baseDirectory = activeDirectory ?? ctx.cwd;
-      const nextDirectory = event.toolName === "bash" ? toolDirectory(event.input, baseDirectory) : undefined;
+      const nextDirectory =
+        event.toolName === "bash" && !(typeof event.input.cwd === "string" && event.input.cwd.trim())
+          ? toolDirectory(event.input, ctx.cwd, baseDirectory)
+          : undefined;
       const handoff = githubWriteHandoff(event, ctx.cwd, baseDirectory);
       if (handoff.decision === "allow") {
         if (nextDirectory) activeDirectory = nextDirectory;
