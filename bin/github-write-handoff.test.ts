@@ -3,8 +3,9 @@ import { expect, test } from "bun:test";
 
 const current = execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8" })
   .trim()
-  .replace(/^.*github\.com[/:]/, "")
-  .replace(/\.git$/, "");
+  .replace(/^.*github\.com[/:]/i, "")
+  .replace(/\.git$/, "")
+  .toLowerCase();
 const external = "elsewhere/example";
 
 function handoff(command: string) {
