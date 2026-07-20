@@ -388,4 +388,3 @@ test("returns a block handoff for an unresolved external target", () => {
     rmSync(repository, { recursive: true, force: true });
   }
 });
-
