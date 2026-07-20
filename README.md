@@ -8,7 +8,7 @@ Opt-in OMP extension that requires one standard OMP Ask approval before a recogn
 - `gh issue` creation and updates, `gh pr` creation and updates, and mutating `gh api` requests.
 - Supported `xd://github` issue and pull-request writes. Known read-only operations remain silent; unsupported device operations block without a target.
 
-The current checkout is resolved from the invoking command directory: tool `cwd`, a leading `cd … &&`, and Git `-C` paths are supported. Nested directories and Git worktrees resolve through Git. A successful Bash directory change becomes the active directory for later tool calls; blocked calls do not change it.
+The current checkout is resolved independently for each invoking command: tool `cwd`, a leading `cd … &&`, and Git `-C` paths are supported. Directory changes do not carry into later tool calls. Nested directories and Git worktrees resolve through Git.
 
 A resolved external target triggers one standard OMP Ask confirmation. Approval permits one exact retry; rejection or no UI blocks. An unresolved target blocks. Same-origin writes are silent.
 
