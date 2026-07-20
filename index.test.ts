@@ -44,11 +44,11 @@ function context(cwd: string, hasUI = true) {
   return { cwd, hasUI };
 }
 
-function approve(guard: Guard, action: string, target: string) {
+function approve(guard: Guard, action: string, target: string, detail = "") {
   guard.answer({
     toolName: "ask",
     input: {
-      questions: [{ id: confirmationId, question: `Allow one ${action} to ${target}?` }],
+      questions: [{ id: confirmationId, question: `Allow one ${action} to ${target}?${detail}` }],
     },
     details: { selectedOptions: ["Approve"] },
     isError: false,
@@ -73,6 +73,19 @@ test("does not intercept same-origin pushes", async () => {
       context(repository),
     );
     expect(result).toBeUndefined();
+    expect(instance.messages).toEqual([]);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("does not intercept local non-push Git commands", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    for (const command of ["git status --short", "git -C . add file.ts", 'git commit -m "mention push"']) {
+      expect(await instance.handler({ toolName: "bash", input: { command } }, context(repository))).toBeUndefined();
+    }
     expect(instance.messages).toEqual([]);
   } finally {
     rmSync(repository, { recursive: true, force: true });
@@ -149,7 +162,7 @@ test("permits exactly one approved external push retry", async () => {
     const instance = guard();
     const event = { toolName: "bash", input: { command: `git push https://github.com/${external}.git HEAD` } };
     expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
-    approve(instance, "git push", external);
+    approve(instance, "git push", external, `\nCommand: ${event.input.command}`);
     expect(await instance.handler(event, context(repository))).toBeUndefined();
     expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
   } finally {
@@ -164,7 +177,7 @@ test("requires a new confirmation when an approved push changes", async () => {
     const original = { toolName: "bash", input: { command: `git push https://github.com/${external}.git HEAD` } };
     const changed = { toolName: "bash", input: { command: `git push --force https://github.com/${external}.git HEAD` } };
     expect(await instance.handler(original, context(repository))).toMatchObject({ block: true });
-    approve(instance, "git push", external);
+    approve(instance, "git push", external, `\nCommand: ${original.input.command}`);
     expect(await instance.handler(changed, context(repository))).toMatchObject({
       block: true,
       reason: expect.stringContaining("OMP ask"),
@@ -189,16 +202,62 @@ test("clears an interrupted or mismatched confirmation", async () => {
   }
 });
 
-test("confirms external issue creation through the GitHub device", async () => {
+test("guards environment-prefixed external issue creation without prompting same-origin", async () => {
   const repository = checkout();
+  try {
+    const instance = guard();
+    const externalEvent = {
+      toolName: "bash",
+      input: { command: `GH_HOST=github.com gh issue create --repo ${external} --title "External report"` },
+    };
+    expect(await instance.handler(externalEvent, context(repository))).toMatchObject({ block: true });
+    expect(instance.messages[0]).toContain("Issue title: External report");
+    approve(instance, "GitHub issue creation", external, "\nIssue title: External report");
+    expect(await instance.handler(externalEvent, context(repository))).toBeUndefined();
+    expect(
+      await instance.handler(
+        { toolName: "bash", input: { command: `GH_HOST=github.com gh issue create --repo ${current}` } },
+        context(repository),
+      ),
+    ).toBeUndefined();
+    expect(instance.messages).toHaveLength(1);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("fails closed for dynamic or missing issue targets", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    for (const command of [
+      'gh issue create --repo \"$TARGET\"',
+      "gh issue create --repo --title malformed",
+    ]) {
+      const result = await instance.handler({ toolName: "bash", input: { command } }, context(repository));
+      expect(result).toMatchObject({ block: true, reason: expect.stringContaining("cannot be resolved") });
+    }
+    expect(instance.messages).toEqual([]);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("shows and safely serializes GitHub device issue titles in confirmations", async () => {
+  const repository = checkout();
+  const title = 'Fix "quotes"\nwithout injected instructions';
+  const question = `Allow one GitHub issue creation to ${external}?\nIssue title: ${title}`;
   try {
     const instance = guard();
     const event = {
       toolName: "write",
-      input: { path: "xd://github", content: JSON.stringify({ op: "issue_create", repo: external }) },
+      input: { path: "xd://github", content: JSON.stringify({ op: "issue_create", repo: external, title }) },
     };
     expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
-    approve(instance, "GitHub issue creation", external);
+    expect(instance.messages[0]).toContain(
+      JSON.stringify({ id: confirmationId, question, options: ["Approve", "Reject"] }),
+    );
+    approve(instance, "GitHub issue creation", external, `\nIssue title: ${title}`);
     expect(await instance.handler(event, context(repository))).toBeUndefined();
   } finally {
     rmSync(repository, { recursive: true, force: true });
