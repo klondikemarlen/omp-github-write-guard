@@ -128,6 +128,7 @@ const GITHUB_DEVICE_READ_OPERATIONS = new Set([
   "search_commits",
   "search_issues",
   "search_prs",
+  "file_read",
   "search_repos",
 ]);
 const GITHUB_DEVICE_WRITE_OPERATIONS: Record<string, { action: string; title?: string; requiresTarget?: boolean }> = {
