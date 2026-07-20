@@ -1,6 +1,10 @@
+import { execFileSync } from "node:child_process";
 import { expect, test } from "bun:test";
 
-const current = "klondikemarlen/omp-github-write-guard";
+const current = execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8" })
+  .trim()
+  .replace(/^.*github\.com[/:]/, "")
+  .replace(/\.git$/, "");
 const external = "elsewhere/example";
 
 function handoff(command: string) {
