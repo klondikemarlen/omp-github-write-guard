@@ -1,17 +1,20 @@
 # OMP GitHub Write Guard
 
-Opt-in OMP extension that requires one standard OMP Ask approval before a GitHub write leaves the active checkout's `origin` repository.
+Opt-in OMP extension that requires one standard OMP Ask approval before a recognized GitHub write leaves the active checkout's `origin` repository.
 
 ## What it guards
 
-- `git push`, including configured and named remotes, is allowed when its resolved push URL matches the active checkout's `origin`.
-- An external resolved target triggers one standard OMP Ask confirmation. Approval permits one exact retry; rejection, an unresolved target, or no UI blocks it.
-- GitHub issue creation through `xd://github` or `gh issue create` follows the same rule.
-- Normal same-origin pushes and issue creation are silent.
+- `git push`, including default, configured, named, SSH, and HTTPS remotes.
+- `gh issue` creation and updates, `gh pr` creation and updates, and mutating `gh api` requests.
+- Supported `xd://github` issue and pull-request writes. Known read-only operations remain silent; unsupported device operations block without a target.
 
-The extension holds only one in-memory, target-bound approval until its matching retry. An interrupted, malformed, or unrelated Ask clears the pending request; it never grants a write. It has no extension-owned dialog, timer, remembered approvals, allowlists, policies, or custom authorization tool.
+The current checkout is resolved from the invoking command directory: tool `cwd`, a leading `cd … &&`, and Git `-C` paths are supported. Nested directories and Git worktrees resolve through Git. A successful Bash directory change becomes the active directory for later tool calls; blocked calls do not change it.
 
-It recognizes ordinary shell command sequences and static arguments. Shell substitutions, functions, aliases, and dynamically generated commands are outside its grammar; run a direct `git push` or `gh issue create` instead. It does not guard arbitrary network clients, GitHub API calls outside issue creation, or writes outside OMP.
+A resolved external target triggers one standard OMP Ask confirmation. Approval permits one exact retry; rejection or no UI blocks. An unresolved target blocks. Same-origin writes are silent.
+
+The extension holds only one in-memory, target-bound approval until its matching retry. An interrupted, malformed, unrelated, or session-directory-changing Ask clears the pending request; it never grants a write. It has no extension-owned dialog, timer, remembered approvals, allowlists, policies, or custom authorization tool.
+
+It recognizes ordinary shell command sequences and static arguments. Shell substitutions, functions, aliases, dynamically generated commands, arbitrary network clients, GitHub API calls outside `gh api`, and writes outside OMP are outside its grammar; run a direct supported command instead.
 
 ## Ask handoff
 
