@@ -459,6 +459,15 @@ test("guards repository-scoped pull request and API writes", async () => {
     ).toEqual({ decision: "allow" });
     expect(
       githubWriteHandoff(
+        {
+          toolName: "write",
+          input: { path: "xd://github", content: JSON.stringify({ op: "file_read", repo: external, path: "README.md" }) },
+        },
+        repository,
+      ),
+    ).toEqual({ decision: "allow" });
+    expect(
+      githubWriteHandoff(
         { toolName: "write", input: { path: "xd://github", content: JSON.stringify({ op: "pr_push", pr: 1 }) } },
         repository,
       ),
