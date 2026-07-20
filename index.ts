@@ -530,12 +530,12 @@ function authorizationKey(action: GitHubWrite["action"], target: string, input: 
 export function githubWriteHandoff(
   event: ToolCallEvent,
   cwd: string,
-  activeDirectory = cwd,
 ): GitHubWriteHandoff {
   const write = writeFor(event);
   if (!write) return { decision: "allow" };
 
-  const toolCwd = toolDirectory(event.input, cwd, activeDirectory) ?? activeDirectory;
+  const inputDirectory = toolDirectory(event.input, cwd);
+  const toolCwd = inputDirectory ?? cwd;
   const commandCwd =
     write.directories?.reduce((directoryCwd, directory) => resolve(directoryCwd, directory), toolCwd) ??
     toolCwd;
@@ -594,7 +594,6 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
   return (pi) => {
     let pending: { key: string; question: string } | undefined;
     let authorizedKey: string | undefined;
-    let activeDirectory: string | undefined;
     let sessionDirectory: string | undefined;
 
     pi.on("tool_result", (event) => {
@@ -610,18 +609,11 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
     pi.on("tool_call", (event, ctx) => {
       if (sessionDirectory !== ctx.cwd) {
         sessionDirectory = ctx.cwd;
-        activeDirectory = ctx.cwd;
         pending = undefined;
         authorizedKey = undefined;
       }
-      const baseDirectory = activeDirectory ?? ctx.cwd;
-      const nextDirectory =
-        event.toolName === "bash" && !(typeof event.input.cwd === "string" && event.input.cwd.trim())
-          ? toolDirectory(event.input, ctx.cwd, baseDirectory)
-          : undefined;
-      const handoff = githubWriteHandoff(event, ctx.cwd, baseDirectory);
+      const handoff = githubWriteHandoff(event, ctx.cwd);
       if (handoff.decision === "allow") {
-        if (nextDirectory) activeDirectory = nextDirectory;
         return;
       }
 
@@ -639,7 +631,6 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
       if (authorizedKey) {
         if (authorizedKey === handoff.fingerprint) {
           authorizedKey = undefined;
-          if (nextDirectory) activeDirectory = nextDirectory;
           return;
         }
         authorizedKey = undefined;

@@ -262,6 +262,26 @@ test("retries a relative checkout change after an approved push", async () => {
   }
 });
 
+test("does not retain a prior checkout switch for later writes", async () => {
+  const repository = checkout();
+  const otherCheckout = checkout(`git@github.com:${external}.git`);
+  try {
+    const instance = guard();
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: `cd ${relative(repository, otherCheckout)} && git status --short` } },
+      context(repository),
+    )).toBeUndefined();
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: `git push git@github.com:${external}.git HEAD` } },
+      context(repository),
+    )).toMatchObject({ block: true });
+    expect(instance.messages).toHaveLength(1);
+  } finally {
+    rmSync(otherCheckout, { recursive: true, force: true });
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("resolves each relative tool cwd from the session checkout", async () => {
   const repository = checkout();
   try {
