@@ -9,6 +9,7 @@ type GitHubWrite = {
   targetUnresolved?: boolean;
   directories?: string[];
   remote?: string;
+  description?: string;
 };
 
 export type ToolCallEvent = { toolName: string; input: ToolInput };
@@ -126,9 +127,7 @@ function gitPushFromWords(words: (string | undefined)[]): GitHubWrite | undefine
     if (typeof word !== "string") return undefined;
     if (word === "-C") {
       const directory = words[index + 1];
-      if (typeof directory !== "string") {
-        return { action: "git push", directories, targetUnresolved: true };
-      }
+      if (typeof directory !== "string") return undefined;
       directories.push(directory);
       index += 2;
       continue;
@@ -139,9 +138,7 @@ function gitPushFromWords(words: (string | undefined)[]): GitHubWrite | undefine
       continue;
     }
     if (GIT_GLOBAL_OPTIONS_WITH_ARGUMENT.has(word)) {
-      if (typeof words[index + 1] !== "string") {
-        return { action: "git push", directories, targetUnresolved: true };
-      }
+      if (typeof words[index + 1] !== "string") return undefined;
       index += 2;
       continue;
     }
@@ -149,7 +146,7 @@ function gitPushFromWords(words: (string | undefined)[]): GitHubWrite | undefine
       index += 1;
       continue;
     }
-    return { action: "git push", directories, targetUnresolved: true };
+    return word.startsWith("-") ? { action: "git push", directories, targetUnresolved: true } : undefined;
   }
 
   let remote: string | undefined;
@@ -167,24 +164,49 @@ function gitPushFromWords(words: (string | undefined)[]): GitHubWrite | undefine
 }
 
 function issueCreateFromWords(words: (string | undefined)[]): GitHubWrite | undefined {
-  if (words[0] !== "gh" || words[1] !== "issue" || words[2] !== "create") return undefined;
+  let index = 0;
+  while (
+    typeof words[index] === "string" &&
+    /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index])
+  ) {
+    index += 1;
+  }
+  if (words[index] !== "gh" || words[index + 1] !== "issue" || words[index + 2] !== "create") {
+    return undefined;
+  }
 
-  for (let index = 3; index < words.length; index += 1) {
+  let target: string | undefined;
+  let description: string | undefined;
+  for (index += 3; index < words.length; index += 1) {
     const word = words[index];
     if (word === "--repo" || word === "-R") {
-      return {
-        action: "GitHub issue creation",
-        target: normalizeRepository(words[index + 1]),
-        targetUnresolved: !normalizeRepository(words[index + 1]),
-      };
+      const repository = words[index + 1];
+      if (typeof repository !== "string" || repository.startsWith("-")) {
+        return { action: "GitHub issue creation", targetUnresolved: true };
+      }
+      target = normalizeRepository(repository);
+      if (!target) return { action: "GitHub issue creation", targetUnresolved: true };
+      index += 1;
+      continue;
     }
     if (typeof word === "string" && (word.startsWith("--repo=") || word.startsWith("-R="))) {
-      const target = normalizeRepository(word.slice(word.indexOf("=") + 1));
-      return { action: "GitHub issue creation", target, targetUnresolved: !target };
+      target = normalizeRepository(word.slice(word.indexOf("=") + 1));
+      if (!target) return { action: "GitHub issue creation", targetUnresolved: true };
+      continue;
     }
-    if (word === undefined) return { action: "GitHub issue creation", targetUnresolved: true };
+    if (word === "--title" || word === "-t") {
+      const title = words[index + 1];
+      if (typeof title === "string" && !title.startsWith("-")) {
+        description = title;
+        index += 1;
+      }
+      continue;
+    }
+    if (typeof word === "string" && (word.startsWith("--title=") || word.startsWith("-t="))) {
+      description = word.slice(word.indexOf("=") + 1);
+    }
   }
-  return { action: "GitHub issue creation" };
+  return { action: "GitHub issue creation", target, description };
 }
 
 function bashGitHubWrite(input: ToolInput): GitHubWrite | undefined {
@@ -202,10 +224,15 @@ function bashGitHubWrite(input: ToolInput): GitHubWrite | undefined {
 function githubDeviceIssueCreate(input: ToolInput): GitHubWrite | undefined {
   if (input.path !== "xd://github" || typeof input.content !== "string") return undefined;
   try {
-    const request = JSON.parse(input.content) as { op?: unknown; repo?: unknown };
+    const request = JSON.parse(input.content) as { op?: unknown; repo?: unknown; title?: unknown };
     if (request.op !== "issue_create") return undefined;
     const target = normalizeRepository(request.repo);
-    return { action: "GitHub issue creation", target, targetUnresolved: !target };
+    return {
+      action: "GitHub issue creation",
+      target,
+      targetUnresolved: !target,
+      description: typeof request.title === "string" ? request.title : undefined,
+    };
   } catch {
     return undefined;
   }
@@ -274,7 +301,15 @@ function writeFor(event: ToolCallEvent): GitHubWrite | undefined {
 const CONFIRMATION_QUESTION_ID = "confirm_external_github_write";
 const APPROVE_WRITE = "Approve";
 
-function isConfirmationAsk(input: ToolInput, action: GitHubWrite["action"], target: string): boolean {
+function confirmationQuestion(write: GitHubWrite, target: string, input: ToolInput): string {
+  const description =
+    write.description ? `\nIssue title: ${write.description}` :
+    write.action === "git push" && typeof input.command === "string" ? `\nCommand: ${input.command}` :
+    "";
+  return `Allow one ${write.action} to ${target}?${description}`;
+}
+
+function isConfirmationAsk(input: ToolInput, expectedQuestion: string): boolean {
   const questions = input.questions;
   if (!Array.isArray(questions) || questions.length !== 1) return false;
 
@@ -285,7 +320,7 @@ function isConfirmationAsk(input: ToolInput, action: GitHubWrite["action"], targ
     "id" in question &&
     "question" in question &&
     question.id === CONFIRMATION_QUESTION_ID &&
-    question.question === `Allow one ${action} to ${target}?`
+    question.question === expectedQuestion
   );
 }
 
@@ -306,7 +341,7 @@ function authorizationKey(action: GitHubWrite["action"], target: string, input: 
 
 export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
   return (pi) => {
-    let pending: { action: GitHubWrite["action"]; target: string; key: string } | undefined;
+    let pending: { key: string; question: string } | undefined;
     let authorizedKey: string | undefined;
 
     pi.on("tool_result", (event) => {
@@ -314,7 +349,7 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
 
       const request = pending;
       pending = undefined;
-      if (!event.isError && isConfirmationAsk(event.input, request.action, request.target) && isApproved(event.details)) {
+      if (!event.isError && isConfirmationAsk(event.input, request.question) && isApproved(event.details)) {
         authorizedKey = request.key;
       }
     });
@@ -359,11 +394,14 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
         return { block: true, reason: `${reason} A confirmation is already pending.` };
       }
 
-      pending = { action: decision.action, target, key };
+      const question = confirmationQuestion(write, target, event.input);
+      pending = { key, question };
       pi.sendUserMessage(
-        `Call the ask tool now with one question: id "${CONFIRMATION_QUESTION_ID}", question ` +
-          `"Allow one ${decision.action} to ${target}?", and options "${APPROVE_WRITE}" and "Reject". ` +
-          `If approved, retry exactly the blocked ${decision.action}; otherwise stop.`,
+        `Call the ask tool now with this exact question: ${JSON.stringify({
+          id: CONFIRMATION_QUESTION_ID,
+          question,
+          options: [APPROVE_WRITE, "Reject"],
+        })}. If approved, retry exactly the blocked ${decision.action}; otherwise stop.`,
         { deliverAs: "steer" },
       );
       return { block: true, reason: `${reason} OMP ask confirmation requested.` };
