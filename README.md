@@ -13,6 +13,14 @@ The extension holds only one in-memory, target-bound approval until its matching
 
 It recognizes ordinary shell command sequences and static arguments. Shell substitutions, functions, aliases, and dynamically generated commands are outside its grammar; run a direct `git push` or `gh issue create` instead. It does not guard arbitrary network clients, GitHub API calls outside issue creation, or writes outside OMP.
 
+## Ask handoff
+
+`bun run handoff` reads `{"event":{"toolName":…,"input":…},"cwd":"…"}` from standard input and writes one JSON packet. Its `decision` is `allow`, `block`, or `ask`; an `ask` packet includes the exact standard OMP Ask payload, resolved source and target repositories, action, and exact-retry fingerprint.
+
+```bash
+printf '%s\n' '{"event":{"toolName":"bash","input":{"command":"git push https://github.com/elsewhere/example.git HEAD"}}}' | bun run handoff
+```
+
 ## Install
 
 ```bash

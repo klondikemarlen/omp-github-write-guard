@@ -13,6 +13,40 @@ type GitHubWrite = {
 };
 
 export type ToolCallEvent = { toolName: string; input: ToolInput };
+
+export type AskPayload = {
+  questions: [
+    {
+      id: string;
+      question: string;
+      options: { label: string; description: string; preview: null }[];
+      header: string;
+      multi: false;
+    },
+  ];
+};
+export type GitHubWriteHandoff =
+  | {
+      decision: "allow";
+      action?: GitHubWrite["action"];
+      currentRepository?: string;
+      target?: string;
+    }
+  | {
+      decision: "ask";
+      action: GitHubWrite["action"];
+      currentRepository: string;
+      target: string;
+      fingerprint: string;
+      ask: AskPayload;
+    }
+  | {
+      decision: "block";
+      action: GitHubWrite["action"];
+      currentRepository?: string;
+      target?: string;
+      reason: string;
+    };
 type ToolResultEvent = {
   toolName: string;
   input: ToolInput;
@@ -339,6 +373,66 @@ function authorizationKey(action: GitHubWrite["action"], target: string, input: 
   return `${action}\u0000${target}\u0000${JSON.stringify(entries)}`;
 }
 
+export function githubWriteHandoff(event: ToolCallEvent, cwd: string): GitHubWriteHandoff {
+  const write = writeFor(event);
+  if (!write) return { decision: "allow" };
+
+  const toolCwd = typeof event.input.cwd === "string" ? event.input.cwd : cwd;
+  const commandCwd =
+    write.directories?.reduce((directoryCwd, directory) => resolve(directoryCwd, directory), toolCwd) ??
+    toolCwd;
+  if (write.action === "git push" && !write.targetUnresolved) {
+    const remote = write.remote ?? defaultPushRemote(commandCwd);
+    write.target = normalizeRepository(remote) ?? gitRemoteRepository(commandCwd, remote);
+    write.targetUnresolved = !write.target;
+  }
+  if (write.action === "GitHub issue creation" && !write.target) {
+    write.target = currentCheckoutRepository(toolCwd);
+  }
+
+  const currentRepository = currentCheckoutRepository(cwd);
+  const decision = guardDecision(write, currentRepository);
+  if (decision.allow) return { decision: "allow", action: write.action, currentRepository, target: write.target };
+
+  const target = decision.target;
+  if (!currentRepository || !target) {
+    return {
+      decision: "block",
+      action: decision.action,
+      currentRepository,
+      target,
+      reason: decision.reason,
+    };
+  }
+
+  const question = confirmationQuestion(write, target, event.input);
+  return {
+    decision: "ask",
+    action: decision.action,
+    currentRepository,
+    target,
+    fingerprint: authorizationKey(decision.action, target, event.input),
+    ask: {
+      questions: [
+        {
+          id: CONFIRMATION_QUESTION_ID,
+          question,
+          options: [
+            {
+              label: APPROVE_WRITE,
+              description: `Allow exactly this ${decision.action} to ${target} once.`,
+              preview: null,
+            },
+            { label: "Reject", description: "Keep this write blocked.", preview: null },
+          ],
+          header: "External GitHub write",
+          multi: false,
+        },
+      ],
+    },
+  };
+}
+
 export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
   return (pi) => {
     let pending: { key: string; question: string } | undefined;
@@ -355,36 +449,22 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
     });
 
     pi.on("tool_call", (event, ctx) => {
-      const write = writeFor(event);
-      if (!write) return;
+      const handoff = githubWriteHandoff(event, ctx.cwd);
+      if (handoff.decision === "allow") return;
 
-      const toolCwd = typeof event.input.cwd === "string" ? event.input.cwd : ctx.cwd;
-      const commandCwd =
-        write.directories?.reduce((cwd, directory) => resolve(cwd, directory), toolCwd) ?? toolCwd;
-      if (write.action === "git push" && !write.targetUnresolved) {
-        const remote = write.remote ?? defaultPushRemote(commandCwd);
-        write.target = normalizeRepository(remote) ?? gitRemoteRepository(commandCwd, remote);
-        write.targetUnresolved = !write.target;
-      }
-      if (write.action === "GitHub issue creation" && !write.target) {
-        write.target = currentCheckoutRepository(toolCwd);
-      }
-
-      const decision = guardDecision(write, currentCheckoutRepository(ctx.cwd));
-      if (decision.allow) return;
-
-      const target = decision.target;
-      const reason = `Blocked ${decision.action} targeting ${target ?? "an unresolved target"}: ${decision.reason}.`;
-      if (!target || !ctx.hasUI) {
+      if (handoff.decision === "block") {
         return {
           block: true,
-          reason: `${reason}${target ? " Interactive confirmation requires OMP UI." : ""}`,
+          reason: `Blocked ${handoff.action} targeting ${handoff.target ?? "an unresolved target"}: ${handoff.reason}.`,
         };
       }
+      const reason = `Blocked ${handoff.action} targeting ${handoff.target}: confirmation is required.`;
+      if (!ctx.hasUI) {
+        return { block: true, reason: `${reason} Interactive confirmation requires OMP UI.` };
+      }
 
-      const key = authorizationKey(decision.action, target, event.input);
       if (authorizedKey) {
-        if (authorizedKey === key) {
+        if (authorizedKey === handoff.fingerprint) {
           authorizedKey = undefined;
           return;
         }
@@ -394,14 +474,10 @@ export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
         return { block: true, reason: `${reason} A confirmation is already pending.` };
       }
 
-      const question = confirmationQuestion(write, target, event.input);
-      pending = { key, question };
+      const question = handoff.ask.questions[0].question;
+      pending = { key: handoff.fingerprint, question };
       pi.sendUserMessage(
-        `Call the ask tool now with this exact question: ${JSON.stringify({
-          id: CONFIRMATION_QUESTION_ID,
-          question,
-          options: [APPROVE_WRITE, "Reject"],
-        })}. If approved, retry exactly the blocked ${decision.action}; otherwise stop.`,
+        `Call the ask tool now with this exact payload: ${JSON.stringify(handoff.ask)}. If approved, retry exactly the blocked ${handoff.action}; otherwise stop.`,
         { deliverAs: "steer" },
       );
       return { block: true, reason: `${reason} OMP ask confirmation requested.` };

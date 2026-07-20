@@ -5,6 +5,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import {
   createGitHubWriteGuard,
   currentCheckoutRepository,
+  githubWriteHandoff,
   type ToolCallHandler,
 } from "./index.ts";
 
@@ -255,7 +256,24 @@ test("shows and safely serializes GitHub device issue titles in confirmations", 
     };
     expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
     expect(instance.messages[0]).toContain(
-      JSON.stringify({ id: confirmationId, question, options: ["Approve", "Reject"] }),
+      JSON.stringify({
+        questions: [
+          {
+            id: confirmationId,
+            question,
+            options: [
+              {
+                label: "Approve",
+                description: `Allow exactly this GitHub issue creation to ${external} once.`,
+                preview: null,
+              },
+              { label: "Reject", description: "Keep this write blocked.", preview: null },
+            ],
+            header: "External GitHub write",
+            multi: false,
+          },
+        ],
+      }),
     );
     approve(instance, "GitHub issue creation", external, `\nIssue title: ${title}`);
     expect(await instance.handler(event, context(repository))).toBeUndefined();
@@ -317,6 +335,55 @@ test("fails closed without interactive confirmation", async () => {
     );
     expect(result).toMatchObject({ block: true, reason: expect.stringContaining("Interactive confirmation") });
     expect(instance.messages).toEqual([]);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("returns an exact external-write ask handoff", () => {
+  const repository = checkout();
+  try {
+    const event = {
+      toolName: "bash",
+      input: { command: `git push https://github.com/${external}.git HEAD` },
+    };
+    expect(githubWriteHandoff(event, repository)).toMatchObject({
+      decision: "ask",
+      action: "git push",
+      currentRepository: current,
+      target: external,
+      fingerprint: expect.any(String),
+      ask: {
+        questions: [
+          {
+            id: confirmationId,
+            question: `Allow one git push to ${external}?\nCommand: ${event.input.command}`,
+            options: [
+              { label: "Approve", description: `Allow exactly this git push to ${external} once.` },
+              { label: "Reject", description: "Keep this write blocked." },
+            ],
+          },
+        ],
+      },
+    });
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("returns a block handoff for an unresolved external target", () => {
+  const repository = checkout();
+  try {
+    expect(
+      githubWriteHandoff(
+        { toolName: "bash", input: { command: 'gh issue create --repo "$TARGET"' } },
+        repository,
+      ),
+    ).toMatchObject({
+      decision: "block",
+      action: "GitHub issue creation",
+      reason: expect.stringContaining("cannot be resolved"),
+    });
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

@@ -1,11 +1,12 @@
 {
   "name": "omp-github-write-guard",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Opt-in OMP confirmation guard for external GitHub pushes and issue creation.",
   "type": "module",
   "scripts": {
     "test": "bun test",
     "release:check": "bun test",
+    "handoff": "bun run bin/github-write-handoff.ts",
     "reinstall": "omp plugin install github:klondikemarlen/omp-github-write-guard"
   },
   "keywords": ["omp-plugin", "github", "safety"],
