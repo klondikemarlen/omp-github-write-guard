@@ -1,6 +1,6 @@
 {
   "name": "omp-github-write-guard",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Opt-in OMP confirmation guard for recognized external GitHub writes.",
   "type": "module",
   "scripts": {
