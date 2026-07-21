@@ -1,5 +1,5 @@
 import type { ToolResultEvent } from "./contract.ts";
-import { isApprovedConfirmation } from "../guard/confirmation.ts";
+import { isApprovedConfirmation } from "../guard/approved-confirmation.ts";
 
 export class AuthorizationState {
   #pending: { key: string; question: string } | undefined;

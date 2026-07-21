@@ -2,14 +2,16 @@ import { resolve } from "node:path";
 
 import type { ToolCallEvent } from "../extension/contract.ts";
 import { currentCheckoutRepository } from "../git/current-checkout.ts";
-import { defaultPushRemote, pushRepository } from "../git/push-remote.ts";
+import { defaultPushRemote } from "../git/default-push-remote.ts";
+import { pushRepository } from "../git/push-repository.ts";
 import { remoteRepository } from "../github/remote-repository.ts";
 import { gitPushWrite } from "../git/push-write.ts";
 import { recognizedGitHubWrite } from "../github/recognized-write.ts";
 import type { GitHubWrite } from "../github/write.ts";
 import { toolDirectory } from "../shell/directory.ts";
 import { shellCommands } from "../shell/commands.ts";
-import { authorizationKey, confirmationQuestion, confirmationQuestionId } from "./confirmation.ts";
+import { authorizationKey } from "./authorization-key.ts";
+import { confirmationQuestion, confirmationQuestionId } from "./confirmation-question.ts";
 import { guardDecision } from "./decision.ts";
 
 export type AskPayload = {
