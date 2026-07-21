@@ -8,7 +8,7 @@ import {
   currentCheckoutRepository,
   githubWriteHandoff,
   type ToolCallHandler,
-} from "./index.ts";
+} from "../index.ts";
 
 const current = "klondikemarlen/omp-github-write-guard";
 const external = "elsewhere/example";

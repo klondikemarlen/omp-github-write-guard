@@ -1,0 +1,35 @@
+import type { ExtensionAPI, ToolCallResult } from "./contract.ts";
+import { AuthorizationState } from "./authorization-state.ts";
+import { githubWriteHandoff } from "../guard/handoff.ts";
+
+export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
+  return (pi) => {
+    const authorization = new AuthorizationState();
+    pi.on("tool_result", (event) => authorization.record(event));
+    pi.on("tool_call", (event, context): ToolCallResult => {
+      authorization.resetFor(context.cwd);
+      const handoff = githubWriteHandoff(event, context.cwd);
+      if (handoff.decision === "allow") return;
+      if (handoff.decision === "block") {
+        return {
+          block: true,
+          reason: `Blocked ${handoff.action} targeting ${handoff.target ?? "an unresolved target"}: ${handoff.reason}.`,
+        };
+      }
+
+      const reason = `Blocked ${handoff.action} targeting ${handoff.target}: confirmation is required.`;
+      if (!context.hasUI) return { block: true, reason: `${reason} Interactive confirmation requires OMP UI.` };
+      if (authorization.consume(handoff.fingerprint)) return;
+
+      const question = handoff.ask.questions[0].question;
+      if (!authorization.begin(handoff.fingerprint, question)) {
+        return { block: true, reason: `${reason} A confirmation is already pending.` };
+      }
+      pi.sendUserMessage(
+        `Call the ask tool now with this exact payload: ${JSON.stringify(handoff.ask)}. If approved, retry exactly the blocked ${handoff.action}; otherwise stop.`,
+        { deliverAs: "steer" },
+      );
+      return { block: true, reason: `${reason} OMP ask confirmation requested.` };
+    });
+  };
+}

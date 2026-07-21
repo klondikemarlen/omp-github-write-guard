@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
-    "release:check": "bun test",
+    "release:check": "tsc --noEmit && bun test",
     "handoff": "bun run bin/github-write-handoff.ts",
     "reinstall": "omp plugin install github:klondikemarlen/omp-github-write-guard"
   },
@@ -22,5 +22,9 @@
   },
   "dependencies": {
     "shell-quote": "^1.10.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^7.0.2"
   }
 }
