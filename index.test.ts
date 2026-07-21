@@ -85,13 +85,13 @@ test("resolves worktree origins", () => {
 test("keeps same-origin GitHub writes inside a worktree", async () => {
   const repository = checkout();
   const worktree = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
-  const unrelated = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const otherCheckout = checkout(`git@github.com:${external}.git`);
   try {
-    mkdirSync(unrelated);
     execFileSync("git", ["-C", repository, "-c", "user.name=Guard", "-c", "user.email=guard@example.test", "commit", "--allow-empty", "-m", "initial"]);
     execFileSync("git", ["-C", repository, "worktree", "add", worktree, "-b", "feature"]);
+    const otherFromWorktree = relative(worktree, otherCheckout);
     const instance = guard();
-    expect(await instance.handler({ toolName: "bash", input: { command: "echo ready", cwd: unrelated } }, context(worktree))).toBeUndefined();
+    expect(await instance.handler({ toolName: "bash", input: { command: `cd ${otherFromWorktree} && echo ready` } }, context(worktree))).toBeUndefined();
 
     for (const [command, action] of [
       [`gh issue close 1 --repo ${current}`, "GitHub issue update"],
@@ -108,7 +108,7 @@ test("keeps same-origin GitHub writes inside a worktree", async () => {
     }
     expect(instance.messages).toEqual([]);
   } finally {
-    rmSync(unrelated, { recursive: true, force: true });
+    rmSync(otherCheckout, { recursive: true, force: true });
     rmSync(worktree, { recursive: true, force: true });
     rmSync(repository, { recursive: true, force: true });
   }
