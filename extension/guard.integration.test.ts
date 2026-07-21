@@ -95,8 +95,10 @@ test("keeps same-origin GitHub writes inside a worktree", async () => {
 
     for (const [command, action] of [
       [`gh issue close 1 --repo ${current}`, "GitHub issue update"],
+      [`gh issue create --repo ${current} --title "Same checkout"`, "GitHub issue creation"],
       [`gh pr create --repo ${current}`, "GitHub pull request creation"],
       [`gh pr merge 1 --repo ${current} --merge --delete-branch`, "GitHub pull request update"],
+      [`git push git@github.com:${current}.git HEAD:refs/heads/same-origin`, "git push"],
     ]) {
       expect(githubWriteHandoff({ toolName: "bash", input: { command } }, worktree)).toMatchObject({
         decision: "allow",
