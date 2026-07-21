@@ -1,4 +1,4 @@
-import { normalizeRepository } from "./repository.ts";
+import { normalizeRepository } from "./normalize-repository.ts";
 
 export function githubTarget(words: (string | undefined)[], index: number, title?: string) {
   let target: string | undefined;

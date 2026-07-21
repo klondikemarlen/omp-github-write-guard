@@ -1,4 +1,4 @@
-import { normalizeRepository } from "./repository.ts";
+import { normalizeRepository } from "./normalize-repository.ts";
 import { githubTarget } from "./target.ts";
 import type { GitHubWrite } from "./write.ts";
 
