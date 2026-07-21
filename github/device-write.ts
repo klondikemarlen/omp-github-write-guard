@@ -1,5 +1,5 @@
 import type { ToolInput } from "../extension/contract.ts";
-import { normalizeRepository } from "./repository.ts";
+import { normalizeRepository } from "./normalize-repository.ts";
 import type { GitHubWrite } from "./write.ts";
 
 type Operation = { action: string; title?: string; requiresTarget?: boolean };

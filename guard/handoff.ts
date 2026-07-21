@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import type { ToolCallEvent } from "../extension/contract.ts";
 import { currentCheckoutRepository } from "../git/current-checkout.ts";
 import { defaultPushRemote, pushRepository } from "../git/push-remote.ts";
-import { remoteRepository } from "../github/repository.ts";
+import { remoteRepository } from "../github/remote-repository.ts";
 import { gitPushWrite } from "../git/push-write.ts";
 import { recognizedGitHubWrite } from "../github/recognized-write.ts";
 import type { GitHubWrite } from "../github/write.ts";
