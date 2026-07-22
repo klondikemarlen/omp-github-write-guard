@@ -13,6 +13,13 @@ function reviewThreadMutationDocument(threadId: string): string {
   }`;
 }
 
+const fragmentFirstReviewThreadMutation = `fragment ThreadFields on PullRequestReviewThread {
+  isResolved
+}
+mutation {
+  resolveReviewThread(input: { threadId: "thread" }) { thread { ...ThreadFields } }
+}`;
+
 function withReviewThreadRepository<T>(repository: string, callback: (argumentsFile: string) => T): T {
   const directory = mkdtempSync(join(tmpdir(), "omp-github-write-guard-"));
   const executable = join(directory, "gh");
@@ -34,14 +41,18 @@ printf '%s' '${response}'
   }
 }
 
-function reviewThreadMutation(threadId = "thread"): ToolCallEvent {
+function graphqlMutation(document: string, extraArguments = ""): ToolCallEvent {
   return {
     toolName: "bash",
     input: {
-      command: "gh api graphql -f query=$QUERY",
-      env: { QUERY: reviewThreadMutationDocument(threadId) },
+      command: `gh api graphql -f query=$QUERY${extraArguments}`,
+      env: { QUERY: document },
     },
   };
+}
+
+function reviewThreadMutation(threadId = "thread"): ToolCallEvent {
+  return graphqlMutation(reviewThreadMutationDocument(threadId));
 }
 
 test("resolves the review-thread repository before authorizing the mutation", () => {
@@ -53,6 +64,32 @@ test("resolves the review-thread repository before authorizing the mutation", ()
     decision: "ask",
     action: "GitHub API write",
     target: "elsewhere/example",
+  });
+});
+
+test("resolves a fragment-first review-thread mutation before authorization", () => {
+  const handoff = withReviewThreadRepository("elsewhere/example", () => {
+    return repositoryMutationHandoff(graphqlMutation(fragmentFirstReviewThreadMutation), process.cwd());
+  });
+
+  expect(handoff).toMatchObject({
+    decision: "ask",
+    action: "GitHub API write",
+    target: "elsewhere/example",
+  });
+});
+
+test("rejects a fragment-first mutation with a decoy repository target", () => {
+  const handoff = withReviewThreadRepository("elsewhere/example", () => {
+    return repositoryMutationHandoff(
+      graphqlMutation(fragmentFirstReviewThreadMutation, " -f dummy=/repos/klondikemarlen/omp-github-write-guard"),
+      process.cwd(),
+    );
+  });
+
+  expect(handoff).toMatchObject({
+    decision: "block",
+    action: "GitHub API write",
   });
 });
 
