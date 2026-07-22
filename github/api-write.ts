@@ -36,6 +36,33 @@ function graphqlQuery(words: (string | undefined)[], index: number, input: ToolI
   return environmentQuery(input);
 }
 
+function githubApiHostnameUnresolved(words: (string | undefined)[], input: ToolInput): boolean {
+  const hostnames: string[] = [];
+  if (typeof process.env.GH_HOST === "string") hostnames.push(process.env.GH_HOST);
+  if (typeof input.env === "object" && input.env !== null && !Array.isArray(input.env)) {
+    const hostname = (input.env as Record<string, unknown>).GH_HOST;
+    if (typeof hostname === "string") hostnames.push(hostname);
+  }
+
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (typeof word !== "string") continue;
+    if (word.startsWith("GH_HOST=")) {
+      hostnames.push(word.slice("GH_HOST=".length));
+      continue;
+    }
+    if (word === "--hostname") {
+      const hostname = words[index + 1];
+      if (typeof hostname !== "string") return true;
+      hostnames.push(hostname);
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("--hostname=")) hostnames.push(word.slice("--hostname=".length));
+  }
+  return hostnames.some((hostname) => hostname.toLowerCase() !== "github.com");
+}
+
 function graphqlOperation(document: string): "query" | "mutation" | undefined {
   const source = document.replace(/^\s*(?:#[^\n]*\n\s*)*/, "");
   if ((source.startsWith("{") || /^query\b/.test(source)) && !/\bmutation\b/.test(source)) return "query";
@@ -265,6 +292,7 @@ export function githubApiWrite(words: (string | undefined)[], index: number, inp
   if (operation === "mutation" && document) thread = reviewThread(document);
 
   const targetInfo = githubTarget(words, index);
+  const hostnameUnresolved = githubApiHostnameUnresolved(words, input);
   let target = targetInfo.target;
   let method = "GET";
   let methodUnresolved = false;
@@ -300,7 +328,7 @@ export function githubApiWrite(words: (string | undefined)[], index: number, inp
   return {
     action: "GitHub API write",
     target,
-    targetUnresolved: targetInfo.targetUnresolved || (!target && !thread),
+    targetUnresolved: targetInfo.targetUnresolved || hostnameUnresolved || (!target && !thread),
     reviewThreadId,
     reviewThreadUnresolved,
   };

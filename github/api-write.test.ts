@@ -54,6 +54,34 @@ test("identifies one executable review-thread mutation", () => {
   expect(write).toMatchObject({ reviewThreadId: "thread", targetUnresolved: false });
 });
 
+test("blocks review-thread mutations for non-GitHub.com hosts", () => {
+  const document = `mutation {
+    resolveReviewThread(input: { threadId: "thread" }) { thread { isResolved } }
+  }`;
+  const write = githubApiWrite(
+    ["gh", "api", "graphql", "--hostname", "ghe.example", "-f", `query=${document}`],
+    2,
+    { command: "gh api graphql --hostname ghe.example" },
+  );
+
+  expect(write).toMatchObject({ reviewThreadId: "thread", targetUnresolved: true });
+});
+
+test("blocks review-thread mutations when the resolver inherits a non-GitHub.com host", () => {
+  const originalHostname = process.env.GH_HOST;
+  process.env.GH_HOST = "ghe.example";
+
+  try {
+    const write = graphqlWrite(`mutation {
+      resolveReviewThread(input: { threadId: "thread" }) { thread { isResolved } }
+    }`);
+    expect(write).toMatchObject({ reviewThreadId: "thread", targetUnresolved: true });
+  } finally {
+    if (originalHostname === undefined) delete process.env.GH_HOST;
+    else process.env.GH_HOST = originalHostname;
+  }
+});
+
 test("ignores review-thread text in GraphQL strings and comments", () => {
   const write = graphqlWrite(`mutation @skip(if: false) {
     updatePullRequest(input: { body: "resolveReviewThread(input: { threadId: \\"string\\" })" }) { pullRequest { id } }
