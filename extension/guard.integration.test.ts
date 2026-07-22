@@ -580,6 +580,41 @@ test("guards repository-scoped pull request and API writes", async () => {
   }
 });
 
+test("permits approved target-explicit pull request and issue mutations", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    for (const [command, action] of [
+      [`gh pr edit 79 --repo ${external} --body "Updated"`, "GitHub pull request update"],
+      [`gh pr merge 79 --repo ${external} --merge --delete-branch`, "GitHub pull request update"],
+      [`gh issue close 76 --repo ${external} --comment "Resolved"`, "GitHub issue update"],
+    ]) {
+      const event = { toolName: "bash", input: { command } };
+      expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+      approve(instance, action, external, `\nCommand: ${command}`);
+      expect(await instance.handler(event, context(repository))).toBeUndefined();
+    }
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("blocks targetless pull request mutations outside a GitHub checkout", () => {
+  const unresolved = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  mkdirSync(unresolved);
+  try {
+    expect(
+      githubWriteHandoff({ toolName: "bash", input: { command: "gh pr edit 79 --body Updated" } }, unresolved),
+    ).toMatchObject({
+      decision: "block",
+      action: "GitHub pull request update",
+      reason: expect.stringContaining("no resolvable GitHub origin"),
+    });
+  } finally {
+    rmSync(unresolved, { recursive: true, force: true });
+  }
+});
+
 test("fails closed without interactive confirmation", async () => {
   const repository = checkout();
   try {
