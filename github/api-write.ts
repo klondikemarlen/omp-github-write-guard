@@ -64,10 +64,12 @@ function githubApiHostnameUnresolved(words: (string | undefined)[], input: ToolI
 }
 
 function graphqlOperation(document: string): "query" | "mutation" | undefined {
-  const source = document.replace(/^\s*(?:#[^\n]*\n\s*)*/, "");
-  if ((source.startsWith("{") || /^query\b/.test(source)) && !/\bmutation\b/.test(source)) return "query";
-  if (/^mutation\b/.test(source)) return "mutation";
-  return undefined;
+  const tokens = graphqlTokens(document);
+  if (!tokens) return undefined;
+
+  const operation = graphqlDocumentOperation(tokens);
+  if (!operation || operation.kind === "subscription") return undefined;
+  return operation.kind;
 }
 
 type GraphqlToken = { type: "name" | "string" | "punct"; value: string };
@@ -141,6 +143,7 @@ function graphqlTokens(document: string): GraphqlToken[] | undefined {
 
 type ReviewThread = { id: string } | { unresolved: true };
 type GraphqlSelection = { start: number; end: number };
+type GraphqlOperation = { kind: "query" | "mutation" | "subscription"; selection: GraphqlSelection };
 
 function matchingToken(tokens: GraphqlToken[], start: number, opening: string, closing: string): number | undefined {
   let depth = 0;
@@ -171,9 +174,15 @@ function definitionSelection(tokens: GraphqlToken[], start: number): GraphqlSele
   return undefined;
 }
 
-function mutationSelection(tokens: GraphqlToken[]): GraphqlSelection | undefined {
+function graphqlDocumentOperation(tokens: GraphqlToken[]): GraphqlOperation | undefined {
+  if (tokens[0]?.value === "{") {
+    const end = matchingToken(tokens, 0, "{", "}");
+    if (end === undefined || end !== tokens.length - 1) return undefined;
+    return { kind: "query", selection: { start: 0, end } };
+  }
+
   let operationCount = 0;
-  let mutation: GraphqlSelection | undefined;
+  let operation: GraphqlOperation | undefined;
   for (let index = 0; index < tokens.length;) {
     const definition = tokens[index];
     if (definition.type !== "name") return undefined;
@@ -184,12 +193,21 @@ function mutationSelection(tokens: GraphqlToken[]): GraphqlSelection | undefined
     if (definition.value !== "fragment") {
       if (!["mutation", "query", "subscription"].includes(definition.value)) return undefined;
       operationCount += 1;
-      if (definition.value === "mutation") mutation = selection;
+      operation = {
+        kind: definition.value as GraphqlOperation["kind"],
+        selection,
+      };
     }
     index = selection.end + 1;
   }
   if (operationCount !== 1) return undefined;
-  return mutation;
+  return operation;
+}
+
+function mutationSelection(tokens: GraphqlToken[]): GraphqlSelection | undefined {
+  const operation = graphqlDocumentOperation(tokens);
+  if (!operation || operation.kind !== "mutation") return undefined;
+  return operation.selection;
 }
 
 function reviewThreadArgument(tokens: GraphqlToken[], start: number, end: number): string | undefined {
@@ -284,12 +302,12 @@ export function githubApiWrite(words: (string | undefined)[], index: number, inp
   let document: string | undefined;
   if (isGraphQL) document = graphqlQuery(words, index + 1, input);
 
+  let thread: ReviewThread | undefined;
+  if (isGraphQL && document) thread = reviewThread(document);
+
   let operation: "query" | "mutation" | undefined;
   if (document) operation = graphqlOperation(document);
   if (operation === "query") return undefined;
-
-  let thread: ReviewThread | undefined;
-  if (operation === "mutation" && document) thread = reviewThread(document);
 
   const targetInfo = githubTarget(words, index);
   const hostnameUnresolved = githubApiHostnameUnresolved(words, input);

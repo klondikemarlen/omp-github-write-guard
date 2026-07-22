@@ -21,6 +21,10 @@ test("does not guard a repository-scoped GraphQL review lookup", () => {
   expect(write).toBeUndefined();
 });
 
+test("does not guard an anonymous GraphQL query", () => {
+  expect(graphqlWrite(`{ viewer { login } }`)).toBeUndefined();
+});
+
 test("fails closed when another command has an environment-backed GraphQL query", () => {
   const write = githubApiWrite(["gh", "api", "graphql", "-f", "query=", undefined], 2, {
     command: "gh api graphql -f query=$READ && gh api graphql -f query=$WRITE",
