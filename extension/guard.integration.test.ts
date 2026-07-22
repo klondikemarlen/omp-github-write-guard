@@ -85,13 +85,15 @@ test("resolves worktree origins", () => {
 test("permits mutations in local-only Git worktrees", async () => {
   const repository = checkout(null);
   const worktree = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const nested = `${repository}/nested`;
   try {
     execFileSync("git", ["-C", repository, "-c", "user.name=Guard", "-c", "user.email=guard@example.test", "commit", "--allow-empty", "-m", "initial"]);
     execFileSync("git", ["-C", repository, "worktree", "add", worktree, "-b", "feature"]);
+    mkdirSync(nested);
     const instance = guard();
     expect(await instance.handler(
       { toolName: "write", input: { path: `${worktree}/inside.ts`, content: "export {};\n" } },
-      context(repository),
+      context(nested),
     )).toBeUndefined();
     expect(instance.messages).toEqual([]);
   } finally {

@@ -1,5 +1,4 @@
 import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
 
 import { remoteRepository } from "../github/remote-repository.ts";
 import { gitCommandOutput } from "./command.ts";
@@ -22,9 +21,9 @@ export function currentCheckoutBoundary(cwd: string): string | undefined {
   const repository = currentCheckoutRepository(cwd);
   if (repository) return repository;
 
-  const commonDirectory = gitCommandOutput(cwd, ["rev-parse", "--git-common-dir"]);
+  const commonDirectory = gitCommandOutput(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   try {
-    return commonDirectory && realpathSync(resolve(cwd, commonDirectory));
+    return commonDirectory && realpathSync(commonDirectory);
   } catch {
     return undefined;
   }
