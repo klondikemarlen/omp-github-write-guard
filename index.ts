@@ -1,4 +1,4 @@
-export { createGitHubWriteGuard } from "./extension/create-guard.ts";
+export { createRepositoryBoundaryGuard } from "./extension/create-guard.ts";
 export type {
   ExtensionAPI,
   HookContext,
@@ -12,11 +12,11 @@ export type {
 export { currentCheckoutRepository } from "./git/current-checkout.ts";
 export { guardDecision, type GuardDecision } from "./guard/decision.ts";
 export {
-  githubWriteHandoff,
+  repositoryMutationHandoff,
   type AskPayload,
-  type GitHubWriteHandoff,
+  type RepositoryMutationHandoff,
 } from "./guard/handoff.ts";
 
-import { createGitHubWriteGuard } from "./extension/create-guard.ts";
+import { createRepositoryBoundaryGuard } from "./extension/create-guard.ts";
 
-export default createGitHubWriteGuard();
+export default createRepositoryBoundaryGuard();

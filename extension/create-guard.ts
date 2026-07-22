@@ -1,14 +1,14 @@
 import type { ExtensionAPI, ToolCallResult } from "./contract.ts";
 import { AuthorizationState } from "./authorization-state.ts";
-import { githubWriteHandoff } from "../guard/handoff.ts";
+import { repositoryMutationHandoff } from "../guard/handoff.ts";
 
-export function createGitHubWriteGuard(): (pi: ExtensionAPI) => void {
+export function createRepositoryBoundaryGuard(): (pi: ExtensionAPI) => void {
   return (pi) => {
     const authorization = new AuthorizationState();
     pi.on("tool_result", (event) => authorization.record(event));
     pi.on("tool_call", (event, context): ToolCallResult => {
       authorization.resetFor(context.cwd);
-      const handoff = githubWriteHandoff(event, context.cwd);
+      const handoff = repositoryMutationHandoff(event, context.cwd);
       if (handoff.decision === "allow") return;
       if (handoff.decision === "block") {
         return {

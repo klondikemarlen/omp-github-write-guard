@@ -1,12 +1,11 @@
 import type { ToolInput } from "../extension/contract.ts";
-import type { GitHubWrite } from "../github/write.ts";
 
-export const confirmationQuestionId = "confirm_external_github_write";
+export const confirmationQuestionId = "confirm_repository_boundary_mutation";
 
-export function confirmationQuestion(write: GitHubWrite, target: string, input: ToolInput): string {
-  const description =
-    write.description ? `\n${write.description}` :
+export function confirmationQuestion(action: string, target: string, input: ToolInput, description?: string): string {
+  const detail =
+    description ? `\n${description}` :
     typeof input.command === "string" ? `\nCommand: ${input.command}` :
     "";
-  return `Allow one ${write.action} to ${target}?${description}`;
+  return `Allow one ${action} to ${target}?${detail}`;
 }

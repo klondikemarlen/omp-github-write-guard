@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 
 import type { ToolCallEvent } from "../extension/contract.ts";
-import { currentCheckoutRepository } from "../git/current-checkout.ts";
+import { currentCheckoutRepository, currentCheckoutRoot } from "../git/current-checkout.ts";
 import { defaultPushRemote } from "../git/default-push-remote.ts";
 import { pushRepository } from "../git/push-repository.ts";
 import { remoteRepository } from "../github/remote-repository.ts";
@@ -13,6 +13,7 @@ import { shellCommands } from "../shell/commands.ts";
 import { authorizationKey } from "./authorization-key.ts";
 import { confirmationQuestion, confirmationQuestionId } from "./confirmation-question.ts";
 import { guardDecision } from "./decision.ts";
+import { localMutation } from "./local-mutation.ts";
 
 export type AskPayload = {
   questions: [{
@@ -24,8 +25,8 @@ export type AskPayload = {
   }];
 };
 
-export type GitHubWriteHandoff =
-  | { decision: "allow"; action?: GitHubWrite["action"]; currentRepository?: string; target?: string }
+export type RepositoryMutationHandoff =
+  | { decision: "allow"; action?: string; currentRepository?: string; target?: string }
   | { decision: "ask"; action: string; currentRepository?: string; target: string; fingerprint: string; ask: AskPayload }
   | { decision: "block"; action: string; currentRepository?: string; target?: string; reason: string };
 
@@ -40,7 +41,37 @@ function writeFor(event: ToolCallEvent): GitHubWrite | undefined {
   return writes.length > 1 ? { action: "GitHub write", targetUnresolved: true } : undefined;
 }
 
-export function githubWriteHandoff(event: ToolCallEvent, cwd: string): GitHubWriteHandoff {
+function askHandoff(
+  action: string,
+  target: string,
+  event: ToolCallEvent,
+  context: string,
+  currentRepository?: string,
+  description?: string,
+): RepositoryMutationHandoff {
+  const question = confirmationQuestion(action, target, event.input, description);
+  return {
+    decision: "ask",
+    action,
+    currentRepository,
+    target,
+    fingerprint: authorizationKey(action, target, event.input, context),
+    ask: {
+      questions: [{
+        id: confirmationQuestionId,
+        question,
+        options: [
+          { label: "Approve", description: `Allow exactly this ${action} to ${target} once.`, preview: null },
+          { label: "Reject", description: "Keep this write blocked.", preview: null },
+        ],
+        header: "Repository boundary",
+        multi: false,
+      }],
+    },
+  };
+}
+
+function githubHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHandoff {
   const write = writeFor(event);
   if (!write) return { decision: "allow" };
 
@@ -56,31 +87,35 @@ export function githubWriteHandoff(event: ToolCallEvent, cwd: string): GitHubWri
     write.target = currentCheckoutRepository(commandCwd);
   }
 
-  const currentRepository = currentCheckoutRepository(commandCwd);
+  const currentRepository = currentCheckoutRepository(cwd);
   const decision = guardDecision(write, currentRepository);
   if (decision.allow) return { decision: "allow", action: write.action, currentRepository, target: write.target };
   if (!decision.target) {
     return { decision: "block", action: decision.action, currentRepository, reason: decision.reason };
   }
 
-  const question = confirmationQuestion(write, decision.target, event.input);
-  return {
-    decision: "ask",
-    action: decision.action,
+  return askHandoff(
+    decision.action,
+    decision.target,
+    event,
+    currentRepository ?? currentCheckoutRoot(cwd) ?? cwd,
     currentRepository,
-    target: decision.target,
-    fingerprint: authorizationKey(decision.action, decision.target, event.input, currentRepository ?? commandCwd),
-    ask: {
-      questions: [{
-        id: confirmationQuestionId,
-        question,
-        options: [
-          { label: "Approve", description: `Allow exactly this ${decision.action} to ${decision.target} once.`, preview: null },
-          { label: "Reject", description: "Keep this write blocked.", preview: null },
-        ],
-        header: "External GitHub write",
-        multi: false,
-      }],
-    },
-  };
+    write.description,
+  );
+}
+
+function localHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHandoff | undefined {
+  const mutation = localMutation(event, cwd);
+  if (!mutation) return undefined;
+  if (!mutation.targets) {
+    return { decision: "block", action: mutation.action, reason: mutation.reason ?? "the local file target cannot be resolved" };
+  }
+
+  return askHandoff(mutation.action, mutation.targets.join(", "), event, mutation.root);
+}
+
+export function repositoryMutationHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHandoff {
+  const github = githubHandoff(event, cwd);
+  if (github.decision !== "allow") return github;
+  return localHandoff(event, cwd) ?? github;
 }
