@@ -1,3 +1,4 @@
+import type { ToolInput } from "../extension/contract.ts";
 import { executableIndex } from "../shell/executable-index.ts";
 import { githubApiWrite } from "./api-write.ts";
 import { githubTarget } from "./target.ts";
@@ -27,10 +28,10 @@ const OPERATIONS: Record<string, Operation> = {
   "pr unlock": { action: "GitHub pull request update" },
 };
 
-export function githubCliWrite(words: (string | undefined)[]): GitHubWrite | undefined {
+export function githubCliWrite(input: ToolInput, words: (string | undefined)[]): GitHubWrite | undefined {
   const index = executableIndex(words);
   if (words[index] !== "gh") return undefined;
-  if (words[index + 1] === "api") return githubApiWrite(words, index + 2);
+  if (words[index + 1] === "api") return githubApiWrite(words, index + 2, input);
 
   const operation = OPERATIONS[`${words[index + 1]} ${words[index + 2]}`];
   return operation ? { action: operation.action, ...githubTarget(words, index + 3, operation.title) } : undefined;

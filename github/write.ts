@@ -5,4 +5,6 @@ export type GitHubWrite = {
   directories?: string[];
   remote?: string;
   description?: string;
+  reviewThreadId?: string;
+  reviewThreadUnresolved?: boolean;
 };
