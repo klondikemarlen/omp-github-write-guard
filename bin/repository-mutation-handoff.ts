@@ -1,4 +1,4 @@
-import { githubWriteHandoff, type ToolCallEvent } from "../index.ts";
+import { repositoryMutationHandoff, type ToolCallEvent } from "../index.ts";
 
 const request: unknown = JSON.parse(await Bun.stdin.text());
 if (
@@ -17,4 +17,4 @@ if (
 }
 
 const cwd = "cwd" in request && typeof request.cwd === "string" ? request.cwd : process.cwd();
-process.stdout.write(`${JSON.stringify(githubWriteHandoff(request.event as ToolCallEvent, cwd))}\n`);
+process.stdout.write(`${JSON.stringify(repositoryMutationHandoff(request.event as ToolCallEvent, cwd))}\n`);

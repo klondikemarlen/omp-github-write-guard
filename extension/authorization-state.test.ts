@@ -7,7 +7,7 @@ const question = "Allow one git push to elsewhere/example?";
 function approval(selectedOptions: string[]) {
   return {
     toolName: "ask",
-    input: { questions: [{ id: "confirm_external_github_write", question }] },
+    input: { questions: [{ id: "confirm_repository_boundary_mutation", question }] },
     details: { selectedOptions },
     isError: false,
   };

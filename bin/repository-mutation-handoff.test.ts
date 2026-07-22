@@ -10,7 +10,7 @@ const external = "elsewhere/example";
 
 function handoff(command: string) {
   const result = Bun.spawnSync({
-    cmd: ["bun", "bin/github-write-handoff.ts"],
+    cmd: ["bun", "bin/repository-mutation-handoff.ts"],
     stdin: new TextEncoder().encode(JSON.stringify({ event: { toolName: "bash", input: { command } } })),
     stdout: "pipe",
   });
@@ -18,12 +18,12 @@ function handoff(command: string) {
   return JSON.parse(new TextDecoder().decode(result.stdout));
 }
 
-test("prints every GitHub write decision", () => {
+test("prints repository mutation decisions", () => {
   expect(handoff("git push origin HEAD")).toMatchObject({ decision: "allow", target: current });
   expect(handoff(`git push https://github.com/${external}.git HEAD`)).toMatchObject({
     decision: "ask",
     target: external,
-    ask: { questions: [{ id: "confirm_external_github_write" }] },
+    ask: { questions: [{ id: "confirm_repository_boundary_mutation" }] },
   });
   expect(handoff('gh issue create --repo "$TARGET"')).toMatchObject({ decision: "block" });
   expect(handoff("git status --short")).toMatchObject({ decision: "allow" });
