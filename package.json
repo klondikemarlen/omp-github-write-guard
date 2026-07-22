@@ -1,7 +1,7 @@
 {
   "name": "omp-github-write-guard",
   "version": "0.6.0",
-  "description": "Opt-in OMP confirmation guard for mutations outside the active checkout.",
+  "description": "Opt-in OMP confirmation guard for mutations outside the current repository.",
   "type": "module",
   "scripts": {
     "test": "bun test",
