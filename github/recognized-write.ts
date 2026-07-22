@@ -4,5 +4,5 @@ import { githubDeviceWrite } from "./device-write.ts";
 import type { GitHubWrite } from "./write.ts";
 
 export function recognizedGitHubWrite(input: ToolInput, words?: (string | undefined)[]): GitHubWrite | undefined {
-  return words ? githubCliWrite(words) : githubDeviceWrite(input);
+  return words ? githubCliWrite(input, words) : githubDeviceWrite(input);
 }

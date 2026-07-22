@@ -7,6 +7,7 @@ import { pushRepository } from "../git/push-repository.ts";
 import { remoteRepository } from "../github/remote-repository.ts";
 import { gitPushWrite } from "../git/push-write.ts";
 import { recognizedGitHubWrite } from "../github/recognized-write.ts";
+import { reviewThreadRepository } from "../github/review-thread-repository.ts";
 import type { GitHubWrite } from "../github/write.ts";
 import { toolDirectory } from "../shell/directory.ts";
 import { shellCommands } from "../shell/commands.ts";
@@ -82,6 +83,15 @@ function githubHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHan
     const remote = write.remote ?? defaultPushRemote(commandCwd);
     write.target = remoteRepository(remote) ?? pushRepository(commandCwd, remote);
     write.targetUnresolved = !write.target;
+  }
+  if (write.reviewThreadUnresolved) write.targetUnresolved = true;
+  if (write.reviewThreadId && !write.targetUnresolved) {
+    const threadRepository = reviewThreadRepository(write.reviewThreadId);
+    if (!threadRepository || write.target && write.target !== threadRepository) {
+      write.targetUnresolved = true;
+    } else {
+      write.target = threadRepository;
+    }
   }
   if (write.action !== "git push" && !write.target && !write.targetUnresolved) {
     write.target = currentCheckoutRepository(commandCwd);
