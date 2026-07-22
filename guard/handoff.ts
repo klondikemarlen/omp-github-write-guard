@@ -111,7 +111,7 @@ function localHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHand
     return { decision: "block", action: mutation.action, reason: mutation.reason ?? "the local file target cannot be resolved" };
   }
 
-  return askHandoff(mutation.action, mutation.targets.join(", "), event, mutation.root);
+  return askHandoff(mutation.action, mutation.targets.join(", "), event, mutation.boundary);
 }
 
 export function repositoryMutationHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHandoff {

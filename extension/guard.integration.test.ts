@@ -34,11 +34,11 @@ function guard(): Guard {
   return { handler: handler!, answer: (event) => resultHandler!(event), messages };
 }
 
-function checkout(remote = `https://github.com/${current}.git`) {
+function checkout(remote: string | null = `https://github.com/${current}.git`) {
   const directory = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
   mkdirSync(directory, { recursive: true });
   execFileSync("git", ["-C", directory, "init", "--quiet"]);
-  execFileSync("git", ["-C", directory, "remote", "add", "origin", remote]);
+  if (remote) execFileSync("git", ["-C", directory, "remote", "add", "origin", remote]);
   return directory;
 }
 
@@ -76,6 +76,24 @@ test("resolves worktree origins", () => {
     execFileSync("git", ["-C", repository, "-c", "user.name=Guard", "-c", "user.email=guard@example.test", "commit", "--allow-empty", "-m", "initial"]);
     execFileSync("git", ["-C", repository, "worktree", "add", worktree, "-b", "feature"]);
     expect(currentCheckoutRepository(worktree)).toBe(current);
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("permits mutations in local-only Git worktrees", async () => {
+  const repository = checkout(null);
+  const worktree = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  try {
+    execFileSync("git", ["-C", repository, "-c", "user.name=Guard", "-c", "user.email=guard@example.test", "commit", "--allow-empty", "-m", "initial"]);
+    execFileSync("git", ["-C", repository, "worktree", "add", worktree, "-b", "feature"]);
+    const instance = guard();
+    expect(await instance.handler(
+      { toolName: "write", input: { path: `${worktree}/inside.ts`, content: "export {};\n" } },
+      context(repository),
+    )).toBeUndefined();
+    expect(instance.messages).toEqual([]);
   } finally {
     rmSync(worktree, { recursive: true, force: true });
     rmSync(repository, { recursive: true, force: true });
@@ -131,13 +149,18 @@ test("does not intercept same-origin pushes", async () => {
   }
 });
 
-test("permits same-checkout writes and asks before external writes", async () => {
+test("permits writes in same-repository checkouts and asks before external writes", async () => {
   const repository = checkout();
-  const otherCheckout = checkout();
+  const sameRepositoryCheckout = checkout();
+  const otherCheckout = checkout(`git@github.com:${external}.git`);
   try {
     const instance = guard();
     expect(await instance.handler(
       { toolName: "write", input: { path: "inside.ts", content: "export {};\n" } },
+      context(repository),
+    )).toBeUndefined();
+    expect(await instance.handler(
+      { toolName: "write", input: { path: `${sameRepositoryCheckout}/inside.ts`, content: "export {};\n" } },
       context(repository),
     )).toBeUndefined();
     expect(instance.messages).toEqual([]);
@@ -149,13 +172,14 @@ test("permits same-checkout writes and asks before external writes", async () =>
     expect(await instance.handler(event, context(repository))).toBeUndefined();
   } finally {
     rmSync(otherCheckout, { recursive: true, force: true });
+    rmSync(sameRepositoryCheckout, { recursive: true, force: true });
     rmSync(repository, { recursive: true, force: true });
   }
 });
 
-test("asks before writes through symlinks leaving the active checkout", async () => {
+test("asks before writes through symlinks into another repository", async () => {
   const repository = checkout();
-  const otherCheckout = checkout();
+  const otherCheckout = checkout(`git@github.com:${external}.git`);
   try {
     symlinkSync(otherCheckout, `${repository}/outside`);
     const instance = guard();
@@ -172,16 +196,18 @@ test("asks before writes through symlinks leaving the active checkout", async ()
 
 test("asks before moves with an external source or destination", async () => {
   const repository = checkout();
-  const otherCheckout = checkout();
+  const sameRepositoryCheckout = checkout();
+  const otherCheckout = checkout(`git@github.com:${external}.git`);
   try {
     writeFileSync(`${repository}/inside.ts`, "export {};\n");
     writeFileSync(`${otherCheckout}/outside.ts`, "export {};\n");
+    const sameFromRepository = relative(repository, sameRepositoryCheckout);
     const otherFromRepository = relative(repository, otherCheckout);
     const instance = guard();
     expect(await instance.handler(
       {
         toolName: "edit",
-        input: { input: "*** Begin Patch\n[inside.ts#ABCD]\nMV inside-moved.ts\n*** End Patch\n" },
+        input: { input: `*** Begin Patch\n[inside.ts#ABCD]\nMV ${sameFromRepository}/inside-moved.ts\n*** End Patch\n` },
       },
       context(repository),
     )).toBeUndefined();
@@ -200,15 +226,22 @@ test("asks before moves with an external source or destination", async () => {
     }
   } finally {
     rmSync(otherCheckout, { recursive: true, force: true });
+    rmSync(sameRepositoryCheckout, { recursive: true, force: true });
     rmSync(repository, { recursive: true, force: true });
   }
 });
 
-test("anchors local writes to the session checkout and blocks unknown URI targets", async () => {
+test("resolves write targets without redefining the active repository boundary", async () => {
   const repository = checkout();
-  const otherCheckout = checkout();
+  const sameRepositoryCheckout = checkout();
+  const otherCheckout = checkout(`git@github.com:${external}.git`);
   try {
     const instance = guard();
+    expect(await instance.handler(
+      { toolName: "write", input: { path: "created.ts", content: "", cwd: sameRepositoryCheckout } },
+      context(repository),
+    )).toBeUndefined();
+
     const target = `${otherCheckout}/created.ts`;
     const event = { toolName: "write", input: { path: "created.ts", content: "", cwd: otherCheckout } };
     expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
@@ -220,6 +253,7 @@ test("anchors local writes to the session checkout and blocks unknown URI target
     )).toMatchObject({ block: true, reason: expect.stringContaining("cannot be resolved") });
   } finally {
     rmSync(otherCheckout, { recursive: true, force: true });
+    rmSync(sameRepositoryCheckout, { recursive: true, force: true });
     rmSync(repository, { recursive: true, force: true });
   }
 });

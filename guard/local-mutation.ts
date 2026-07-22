@@ -1,13 +1,13 @@
 import { existsSync, realpathSync } from "node:fs";
-import { basename, dirname, relative, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 
 import type { ToolCallEvent } from "../extension/contract.ts";
-import { currentCheckoutRoot } from "../git/current-checkout.ts";
+import { currentCheckoutBoundary } from "../git/current-checkout.ts";
 import { toolDirectory } from "../shell/directory.ts";
 
 export type LocalMutation = {
   action: string;
-  root: string;
+  boundary: string;
   targets?: string[];
   reason?: string;
 };
@@ -28,6 +28,16 @@ function canonicalTarget(path: string, cwd: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function containingBoundary(path: string): string | undefined {
+  let directory = dirname(path);
+  while (!existsSync(directory)) {
+    const parent = dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+  return currentCheckoutBoundary(directory);
 }
 
 
@@ -64,21 +74,22 @@ export function localMutation(event: ToolCallEvent, sessionCwd: string): LocalMu
   const mutation = mutationPaths(event);
   if (!mutation) return undefined;
 
-  const root = currentCheckoutRoot(sessionCwd);
-  if (!root) return { action: mutation.action, root: sessionCwd, reason: "the active checkout root cannot be resolved" };
-  if (!mutation.paths.length) return { action: mutation.action, root, reason: "the local file target cannot be resolved" };
+  const boundary = currentCheckoutBoundary(sessionCwd);
+  if (!boundary) {
+    return { action: mutation.action, boundary: sessionCwd, reason: "the active checkout boundary cannot be resolved" };
+  }
+  if (!mutation.paths.length) {
+    return { action: mutation.action, boundary, reason: "the local file target cannot be resolved" };
+  }
 
   const cwd = toolDirectory(event.input, sessionCwd) ?? sessionCwd;
   const targets: string[] = [];
   for (const path of mutation.paths) {
     const target = canonicalTarget(path, cwd);
-    if (!target) return { action: mutation.action, root, reason: "the local file target cannot be resolved" };
+    if (!target) return { action: mutation.action, boundary, reason: "the local file target cannot be resolved" };
     targets.push(target);
   }
 
-  const externalTargets = [...new Set(targets.filter((target) => {
-    const path = relative(root, target);
-    return path === ".." || path.startsWith("../") || path.startsWith("..\\");
-  }))];
-  return externalTargets.length ? { action: mutation.action, root, targets: externalTargets } : undefined;
+  const externalTargets = [...new Set(targets.filter((target) => containingBoundary(target) !== boundary))];
+  return externalTargets.length ? { action: mutation.action, boundary, targets: externalTargets } : undefined;
 }
