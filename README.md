@@ -28,10 +28,8 @@ printf '%s\n' '{"event":{"toolName":"bash","input":{"command":"git push https://
 ## Install
 
 ```bash
-omp plugin install github:klondikemarlen/omp-github-write-guard
+omp plugin install github:klondikemarlen/omp-repository-boundary-guard
 ```
-
-The distribution slug remains `omp-github-write-guard` to preserve existing installations; the product name now describes its repository-boundary behavior.
 
 For development:
 
