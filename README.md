@@ -7,11 +7,11 @@ Opt-in OMP extension that requires one standard OMP Ask approval before a mutati
 - Local `write` and structured `edit` operations, including both endpoints of an `edit` move.
 - `git push`, including default, configured, named, SSH, and HTTPS remotes.
 - `gh issue` creation and updates, `gh pr` creation and updates, and mutating `gh api` requests.
-- Supported `xd://github` issue and pull-request writes. Known read-only operations remain silent; unsupported device operations block without a target.
+- Supported `xd://github` issue and pull-request writes. Registered internal dispatch targets `xd://lsp` and `xd://report_issue` pass through their handlers; unknown URI targets remain unresolved and blocked. Known read-only operations remain silent; unsupported device operations block without a target.
 
 The active boundary is the invoking session's normalized GitHub `origin`, or its canonical Git root when no GitHub origin exists. Local targets resolve through their containing checkout with the same identity. Tool `cwd`, a shell `cd … &&`, and Git `-C` resolve a mutation target, but never redefine the active boundary. Nested directories, worktrees, and separate local clones of the same repository stay inside the boundary.
 
-Mutations inside the active repository stay silent. For GitHub writes, a target matching the active checkout's `origin` stays silent. A local target in another repository—including a path through an escaping symlink—or a different GitHub repository triggers one standard OMP Ask. New local files resolve through their nearest existing parent; moves validate source and destination. `/tmp`, non-Git paths, and unknown URI targets receive no inferred exception.
+Mutations inside the active repository stay silent. For GitHub writes, a target matching the active checkout's `origin` stays silent. A local target in another repository—including a path through an escaping symlink—or a different GitHub repository triggers one standard OMP Ask. New local files resolve through their nearest existing parent; moves validate source and destination. A canonical non-Git local target beneath the operating system temporary directory is allowed; symlink escapes and temporary paths inside another repository remain protected. Other non-Git paths and unknown URI targets receive no inferred exception.
 
 Approval permits one exact retry; rejection or no UI blocks. An unresolved target blocks. The extension holds one in-memory, target-bound approval until its matching retry. An interrupted, malformed, unrelated, or session-directory-changing Ask clears the pending request; it never grants a write. It has no extension-owned dialog, timer, remembered approvals, policies, or custom authorization tool.
 
