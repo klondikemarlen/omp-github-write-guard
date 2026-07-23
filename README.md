@@ -56,3 +56,9 @@ After `main` is pushed:
 ```bash
 bun run reinstall
 ```
+
+`bun run reinstall` is the normal release install path; it uses the generic GitHub reference so the latest merged `main` release is selected. Use an exact commit hash with `--force` only when reproducing a specific release or diagnosing a stale cached install:
+
+```bash
+omp plugin install github:klondikemarlen/omp-repository-boundary-guard#<full-commit-hash> --force
+```
