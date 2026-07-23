@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { relative } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, relative, resolve } from "node:path";
 
 import {
   createRepositoryBoundaryGuard,
@@ -178,6 +179,58 @@ test("permits writes in same-repository checkouts and asks before external write
     rmSync(repository, { recursive: true, force: true });
   }
 });
+
+test("permits non-Git temporary writes but protects symlink escapes", async () => {
+  const repository = checkout();
+  const temporaryDirectory = `${tmpdir()}/omp-repository-boundary-guard-${crypto.randomUUID()}`;
+  try {
+    mkdirSync(temporaryDirectory);
+    const instance = guard();
+    for (const path of [
+      `${temporaryDirectory}/created.ts`,
+      `${temporaryDirectory}/nested/deeper/created.ts`,
+    ]) {
+      expect(await instance.handler(
+        { toolName: "write", input: { path, content: "" } },
+        context(repository),
+      )).toBeUndefined();
+    }
+    expect(instance.messages).toEqual([]);
+    expect(await instance.handler(
+      {
+        toolName: "edit",
+        input: {
+          input: `*** Begin Patch\n[${temporaryDirectory}/source.ts#ABCD]\nMV ${temporaryDirectory}/nested/destination.ts\n*** End Patch\n`,
+        },
+      },
+      context(repository),
+    )).toBeUndefined();
+
+    const nonTemporaryTarget = resolve(dirname(tmpdir()), `omp-repository-boundary-guard-${crypto.randomUUID()}`);
+    const nonTemporaryEvent = {
+      toolName: "write",
+      input: { path: nonTemporaryTarget, content: "" },
+    };
+    expect(await instance.handler(nonTemporaryEvent, context(repository))).toMatchObject({ block: true });
+    approve(instance, "file write", nonTemporaryTarget);
+    expect(await instance.handler(nonTemporaryEvent, context(repository))).toBeUndefined();
+
+    const outsideDirectory = dirname(tmpdir());
+    symlinkSync(outsideDirectory, `${temporaryDirectory}/outside`);
+    const event = {
+      toolName: "write",
+      input: { path: `${temporaryDirectory}/outside/created.ts`, content: "" },
+    };
+    const target = resolve(outsideDirectory, "created.ts");
+    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+    approve(instance, "file write", target);
+    expect(await instance.handler(event, context(repository))).toBeUndefined();
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 
 test("asks before writes through symlinks into another repository", async () => {
   const repository = checkout();
@@ -623,6 +676,33 @@ test("does not prompt same-origin issue creation", async () => {
       context(repository),
     );
     expect(result).toBeUndefined();
+    expect(instance.messages).toEqual([]);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("passes registered internal dispatch through and blocks unknown URIs", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    for (const path of ["xd://lsp", "xd://report_issue"]) {
+      expect(await instance.handler(
+        { toolName: "write", input: { path, content: "" } },
+        context(repository),
+      )).toBeUndefined();
+    }
+    expect(await instance.handler(
+      { toolName: "write", input: { path: "xd://unknown", content: "" } },
+      context(repository),
+    )).toMatchObject({ block: true, reason: expect.stringContaining("cannot be resolved") });
+    expect(await instance.handler(
+      {
+        toolName: "edit",
+        input: { input: "*** Begin Patch\n[xd://unknown#ABCD]\n*** End Patch\n" },
+      },
+      context(repository),
+    )).toMatchObject({ block: true, reason: expect.stringContaining("cannot be resolved") });
     expect(instance.messages).toEqual([]);
   } finally {
     rmSync(repository, { recursive: true, force: true });
