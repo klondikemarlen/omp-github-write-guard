@@ -314,19 +314,24 @@ export function githubApiWrite(words: (string | undefined)[], index: number, inp
   let target = targetInfo.target;
   let method = "GET";
   let methodUnresolved = false;
+  let methodExplicit = false;
   let hasFields = false;
 
   for (; index < words.length; index += 1) {
     const word = words[index];
     if (word === "--method" || word === "-X") {
       const value = words[index + 1];
-      if (typeof value === "string") method = value.toUpperCase();
+      methodExplicit = true;
+      if (typeof value === "string" && !value.startsWith("-")) method = value.toUpperCase();
       else methodUnresolved = true;
       index += 1;
       continue;
     }
     if (typeof word === "string" && (word.startsWith("--method=") || word.startsWith("-X"))) {
-      method = (word.startsWith("--method=") ? word.slice(word.indexOf("=") + 1) : word.slice(2)).toUpperCase();
+      methodExplicit = true;
+      const methodValue = word.startsWith("--method=") ? word.slice(word.indexOf("=") + 1) : word.slice(2);
+      if (methodValue) method = methodValue.toUpperCase();
+      else methodUnresolved = true;
       continue;
     }
     hasFields ||= word === "--raw-field" || word === "-f" || word === "--field" || word === "-F" || word === "--input" ||
@@ -335,7 +340,7 @@ export function githubApiWrite(words: (string | undefined)[], index: number, inp
     if (!target && path) target = normalizeRepository(`${path[1]}/${path[2]}`);
   }
 
-  if (!methodUnresolved && method === "GET" && !hasFields) return undefined;
+  if (!methodUnresolved && method === "GET" && (!hasFields || methodExplicit)) return undefined;
   let reviewThreadId: string | undefined;
   let reviewThreadUnresolved: boolean | undefined;
   if (thread) {
@@ -346,7 +351,7 @@ export function githubApiWrite(words: (string | undefined)[], index: number, inp
   return {
     action: "GitHub API write",
     target,
-    targetUnresolved: targetInfo.targetUnresolved || hostnameUnresolved || (!target && !thread),
+    targetUnresolved: targetInfo.targetUnresolved || hostnameUnresolved || methodUnresolved || (!target && !thread),
     reviewThreadId,
     reviewThreadUnresolved,
   };

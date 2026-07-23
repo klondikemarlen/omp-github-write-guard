@@ -1,11 +1,11 @@
 {
   "name": "omp-repository-boundary-guard",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Opt-in OMP confirmation guard for mutations outside the active repository boundary.",
   "type": "module",
   "scripts": {
     "test": "bun test",
-    "release:check": "tsc --noEmit && bun test",
+    "release:check": "bun run scripts/release-check.ts && tsc --noEmit && bun test",
     "handoff": "bun run bin/repository-mutation-handoff.ts",
     "reinstall": "omp plugin install github:klondikemarlen/omp-repository-boundary-guard"
   },

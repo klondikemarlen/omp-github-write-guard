@@ -47,12 +47,15 @@ function context(cwd: string, hasUI = true) {
   return { cwd, hasUI };
 }
 
-function approve(guard: Guard, action: string, target: string, detail = "") {
+function approve(guard: Guard, _action: string, _target: string, _detail = "") {
+  const message = guard.messages.at(-1);
+  if (!message) throw new Error("missing confirmation request");
+  const start = message.indexOf("{");
+  const end = message.indexOf("}. If approved", start) + 1;
+  const input = JSON.parse(message.slice(start, end)) as Record<string, unknown>;
   guard.answer({
     toolName: "ask",
-    input: {
-      questions: [{ id: confirmationId, question: `Allow one ${action} to ${target}?${detail}` }],
-    },
+    input,
     details: { selectedOptions: ["Approve"] },
     isError: false,
   });
@@ -225,6 +228,20 @@ test("permits non-Git temporary writes but protects symlink escapes", async () =
     expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
     approve(instance, "file write", target);
     expect(await instance.handler(event, context(repository))).toBeUndefined();
+
+    const danglingOutside = `${temporaryDirectory}/dangling-outside`;
+    symlinkSync(resolve(outsideDirectory, "missing-target"), danglingOutside);
+    expect(await instance.handler(
+      { toolName: "write", input: { path: `${danglingOutside}/created.ts`, content: "" } },
+      context(repository),
+    )).toMatchObject({ block: true });
+
+    const danglingInside = `${temporaryDirectory}/dangling-inside`;
+    symlinkSync("missing-target", danglingInside);
+    expect(await instance.handler(
+      { toolName: "write", input: { path: `${danglingInside}/created.ts`, content: "" } },
+      context(repository),
+    )).toBeUndefined();
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
     rmSync(repository, { recursive: true, force: true });
@@ -234,6 +251,7 @@ test("permits non-Git temporary writes but protects symlink escapes", async () =
 
 test("asks before writes through symlinks into another repository", async () => {
   const repository = checkout();
+
   const otherCheckout = checkout(`git@github.com:${external}.git`);
   try {
     symlinkSync(otherCheckout, `${repository}/outside`);
@@ -245,6 +263,25 @@ test("asks before writes through symlinks into another repository", async () => 
     expect(await instance.handler(event, context(repository))).toBeUndefined();
   } finally {
     rmSync(otherCheckout, { recursive: true, force: true });
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("protects dangling symlink escapes from a checkout", async () => {
+  const repository = checkout();
+  try {
+    symlinkSync("../outside-missing", `${repository}/dangling-outside`);
+    symlinkSync("inside-missing", `${repository}/dangling-inside`);
+    const instance = guard();
+    expect(await instance.handler(
+      { toolName: "write", input: { path: "dangling-outside/created.ts", content: "" } },
+      context(repository),
+    )).toMatchObject({ block: true });
+    expect(await instance.handler(
+      { toolName: "write", input: { path: "dangling-inside/created.ts", content: "" } },
+      context(repository),
+    )).toBeUndefined();
+  } finally {
     rmSync(repository, { recursive: true, force: true });
   }
 });
@@ -361,6 +398,47 @@ test("does not intercept local non-push Git commands", async () => {
       expect(await instance.handler({ toolName: "bash", input: { command } }, context(repository))).toBeUndefined();
     }
     expect(instance.messages).toEqual([]);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("does not reissue a pending confirmation", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    const event = { toolName: "bash", input: { command: `gh issue create --repo ${external} --title "Pending"` } };
+    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+    expect(await instance.handler(event, context(repository))).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("confirmation is already pending"),
+    });
+    expect(instance.messages).toHaveLength(1);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("composes with an already-approved external GitHub gate", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    const event = { toolName: "bash", input: { command: `gh issue create --repo ${external} --title "Approved externally" --body "Original"` } };
+    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+    instance.answer({
+      toolName: "ask",
+      input: {
+        questions: [{
+          id: "confirm_external_github_write",
+          question: `Allow one GitHub issue creation to ${external}?\nIssue title: Approved externally`,
+        }],
+      },
+      details: { selectedOptions: ["Approve"] },
+      isError: false,
+    });
+    const retry = { toolName: "bash", input: { command: `gh issue create --repo ${external} --title "Approved externally" --body 'Original'` } };
+    expect(await instance.handler(retry, context(repository))).toBeUndefined();
+    expect(instance.messages).toHaveLength(1);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -571,6 +649,41 @@ test("requires a new confirmation when an approved push changes", async () => {
   }
 });
 
+test("allows one explicit mixed-boundary override for resolved mutations", async () => {
+  const repository = checkout();
+  const otherCheckout = checkout(`https://github.com/${external}.git`);
+  try {
+    const instance = guard();
+    const githubOverride = {
+      toolName: "bash",
+      input: { command: `OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_MIXED=1 gh issue create --repo ${external} --title "Explicit override"` },
+    };
+    expect(await instance.handler(githubOverride, context(repository))).toBeUndefined();
+    expect(instance.messages).toEqual([]);
+
+    const compoundOverride = {
+      toolName: "bash",
+      input: { command: `true && OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_MIXED=1 gh issue create --repo ${external}` },
+    };
+    expect(await instance.handler(compoundOverride, context(repository))).toMatchObject({ block: true });
+
+    const unresolvedOverride = {
+      toolName: "bash",
+      input: { command: "OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_MIXED=1 gh issue create --repo \"$TARGET\"" },
+    };
+    expect(await instance.handler(unresolvedOverride, context(repository))).toMatchObject({ block: true });
+
+    const localOverride = {
+      toolName: "write",
+      input: { path: `${otherCheckout}/created.ts`, content: "", boundaryOverride: "allow-mixed" },
+    };
+    expect(await instance.handler(localOverride, context(repository))).toBeUndefined();
+  } finally {
+    rmSync(otherCheckout, { recursive: true, force: true });
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("clears an interrupted or mismatched confirmation", async () => {
   const repository = checkout();
   try {
@@ -591,10 +704,10 @@ test("guards environment-prefixed external issue creation without prompting same
     const instance = guard();
     const externalEvent = {
       toolName: "bash",
-      input: { command: `GH_HOST=github.com gh issue create --repo ${external} --title "External report"` },
+      input: { command: `GH_HOST=github.com gh issue create --repo ${external} --title "External report" --body "Why this exists"` },
     };
     expect(await instance.handler(externalEvent, context(repository))).toMatchObject({ block: true });
-    expect(instance.messages[0]).toContain("Issue title: External report");
+    expect(instance.messages[0]).toContain("Body: Why this exists");
     approve(instance, "GitHub issue creation", external, "\nIssue title: External report");
     expect(await instance.handler(externalEvent, context(repository))).toBeUndefined();
     expect(
@@ -629,7 +742,7 @@ test("fails closed for dynamic or missing issue targets", async () => {
 test("shows and safely serializes GitHub device issue titles in confirmations", async () => {
   const repository = checkout();
   const title = 'Fix "quotes"\nwithout injected instructions';
-  const question = `Allow one GitHub issue creation to ${external}?\nIssue title: ${title}`;
+  const question = `Allow one GitHub issue creation to ${external}?\nCurrent repository: ${current}\nTarget repository: ${external}\nIssue title: ${title}`;
   try {
     const instance = guard();
     const event = {
@@ -991,7 +1104,7 @@ test("returns an exact external-write ask handoff", () => {
         questions: [
           {
             id: confirmationId,
-            question: `Allow one git push to ${external}?\nCommand: ${event.input.command}`,
+            question: `Allow one git push to ${external}?\nCurrent repository: ${current}\nTarget repository: ${external}\nCommand: ${event.input.command}`,
             options: [
               { label: "Approve", description: `Allow exactly this git push to ${external} once.` },
               { label: "Reject", description: "Keep this write blocked." },

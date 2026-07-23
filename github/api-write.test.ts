@@ -144,3 +144,43 @@ test("rejects incomplete and failed review-thread lookups", () => {
   expect(incomplete).toBeUndefined();
   expect(failed).toBeUndefined();
 });
+
+test("keeps explicit GET requests with fields read-only", () => {
+  expect(
+    githubApiWrite(
+      ["gh", "api", "repos/elsewhere/example/issues", "--method", "GET", "--field", "state=open"],
+      2,
+      { command: "gh api repos/elsewhere/example/issues --method GET --field state=open" },
+    ),
+  ).toBeUndefined();
+});
+
+test("guards mutating methods with fields", () => {
+  expect(
+    githubApiWrite(
+      ["gh", "api", "repos/elsewhere/example/issues", "--method", "POST", "--field", "title=Issue"],
+      2,
+      { command: "gh api repos/elsewhere/example/issues --method POST --field title=Issue" },
+    ),
+  ).toMatchObject({ action: "GitHub API write", target: "elsewhere/example" });
+});
+
+test("fails closed when the API method is unresolved", () => {
+  expect(
+    githubApiWrite(
+      ["gh", "api", "repos/elsewhere/example/issues", "--method", "--field", "state=open"],
+      2,
+      { command: "gh api repos/elsewhere/example/issues --method --field state=open" },
+    ),
+  ).toMatchObject({ action: "GitHub API write", targetUnresolved: true });
+});
+
+test("keeps default field semantics guarded", () => {
+  expect(
+    githubApiWrite(
+      ["gh", "api", "repos/elsewhere/example/issues", "--field", "state=open"],
+      2,
+      { command: "gh api repos/elsewhere/example/issues --field state=open" },
+    ),
+  ).toMatchObject({ action: "GitHub API write", target: "elsewhere/example" });
+});
