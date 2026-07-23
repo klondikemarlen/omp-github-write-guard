@@ -17,19 +17,24 @@ export function createRepositoryBoundaryGuard(): (pi: ExtensionAPI) => void {
         };
       }
 
-      const reason = `Blocked ${handoff.action} targeting ${handoff.target}: confirmation is required.`;
-      if (!context.hasUI) return { block: true, reason: `${reason} Interactive confirmation requires OMP UI.` };
-      if (authorization.consume(handoff.fingerprint)) return;
+      const authorizationResult = authorization.consume(handoff.fingerprint);
+      if (authorizationResult === "authorized") return;
 
+      const reason = `Blocked ${handoff.action} targeting ${handoff.target}: confirmation is required.`;
+      const authorizationDetail =
+        authorizationResult === "mismatched"
+          ? " An approval exists but does not match this exact retry."
+          : " No matching approval was recorded.";
+      if (!context.hasUI) return { block: true, reason: `${reason}${authorizationDetail} Interactive confirmation requires OMP UI.` };
       const question = handoff.ask.questions[0].question;
       if (!authorization.begin(handoff.fingerprint, question)) {
-        return { block: true, reason: `${reason} A confirmation is already pending.` };
+        return { block: true, reason: `${reason}${authorizationDetail} A confirmation is already pending.` };
       }
       pi.sendUserMessage(
         `Call the ask tool now with this exact payload: ${JSON.stringify(handoff.ask)}. If approved, retry exactly the blocked ${handoff.action}; otherwise stop.`,
         { deliverAs: "steer" },
       );
-      return { block: true, reason: `${reason} OMP ask confirmation requested.` };
+      return { block: true, reason: `${reason}${authorizationDetail} OMP ask confirmation requested.` };
     });
   };
 }

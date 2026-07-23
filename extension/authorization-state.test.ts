@@ -18,17 +18,17 @@ test("authorizes one exact retry", () => {
   state.resetFor("/checkout");
   expect(state.begin("key", question)).toBe(true);
   state.record(approval(["Approve"]));
-  expect(state.consume("key")).toBe(true);
-  expect(state.consume("key")).toBe(false);
+  expect(state.consume("key")).toBe("authorized");
+  expect(state.consume("key")).toBe("missing");
 });
 
-test("clears approval when the retry changes", () => {
+test("distinguishes and clears a mismatched approval", () => {
   const state = new AuthorizationState();
   state.resetFor("/checkout");
   state.begin("key", question);
   state.record(approval(["Approve"]));
-  expect(state.consume("different")).toBe(false);
-  expect(state.consume("key")).toBe(false);
+  expect(state.consume("different")).toBe("mismatched");
+  expect(state.consume("key")).toBe("missing");
 });
 
 test("clears pending authorization when the checkout changes", () => {

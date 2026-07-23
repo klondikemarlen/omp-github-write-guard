@@ -1,6 +1,8 @@
 import type { ToolResultEvent } from "./contract.ts";
 import { isApprovedConfirmation } from "../guard/approved-confirmation.ts";
 
+export type AuthorizationResult = "authorized" | "missing" | "mismatched";
+
 export class AuthorizationState {
   #pending: { key: string; question: string } | undefined;
   #authorizedKey: string | undefined;
@@ -23,13 +25,11 @@ export class AuthorizationState {
     }
   }
 
-  consume(key: string): boolean {
-    if (this.#authorizedKey !== key) {
-      this.#authorizedKey = undefined;
-      return false;
-    }
+  consume(key: string): AuthorizationResult {
+    const authorizedKey = this.#authorizedKey;
     this.#authorizedKey = undefined;
-    return true;
+    if (!authorizedKey) return "missing";
+    return authorizedKey === key ? "authorized" : "mismatched";
   }
 
   begin(key: string, question: string): boolean {
