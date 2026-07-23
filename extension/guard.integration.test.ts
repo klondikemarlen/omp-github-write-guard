@@ -690,6 +690,34 @@ test("allows one approved GitHub issue retry despite changed tool intent", async
   }
 });
 
+test("allows one approved bash GitHub issue retry despite changed tool intent", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    const event = {
+      toolName: "bash",
+      input: {
+        i: "create bash issue",
+        command: `gh issue create --repo ${external} --title "Intent-independent bash issue" --body "body"`,
+      },
+    };
+    expect(await instance.handler(event, context(repository))).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("No matching approval was recorded"),
+    });
+    approve(instance, "GitHub issue creation", external, "\nIssue title: Intent-independent bash issue");
+
+    const retry = {
+      toolName: "bash",
+      input: { ...event.input, i: "retry bash issue" },
+    };
+    expect(await instance.handler(retry, context(repository))).toBeUndefined();
+    expect(await instance.handler(retry, context(repository))).toMatchObject({ block: true });
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("does not consume approval when the retry has no UI", async () => {
   const repository = checkout();
   try {
