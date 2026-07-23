@@ -21,7 +21,7 @@ mutation {
 }`;
 
 function withReviewThreadRepository<T>(repository: string, callback: (argumentsFile: string) => T): T {
-  const directory = mkdtempSync(join(tmpdir(), "omp-github-write-guard-"));
+  const directory = mkdtempSync(join(tmpdir(), "omp-repository-boundary-guard-"));
   const executable = join(directory, "gh");
   const argumentsFile = join(directory, "arguments");
   const originalPath = process.env.PATH;
@@ -82,7 +82,7 @@ test("resolves a fragment-first review-thread mutation before authorization", ()
 test("rejects a fragment-first mutation with a decoy repository target", () => {
   const handoff = withReviewThreadRepository("elsewhere/example", () => {
     return repositoryMutationHandoff(
-      graphqlMutation(fragmentFirstReviewThreadMutation, " -f dummy=/repos/klondikemarlen/omp-github-write-guard"),
+      graphqlMutation(fragmentFirstReviewThreadMutation, " -f dummy=/repos/klondikemarlen/omp-repository-boundary-guard"),
       process.cwd(),
     );
   });
