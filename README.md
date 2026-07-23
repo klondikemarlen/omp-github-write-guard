@@ -31,6 +31,8 @@ printf '%s\n' '{"event":{"toolName":"bash","input":{"command":"git push https://
 omp plugin install github:klondikemarlen/omp-repository-boundary-guard
 ```
 
+After installing or reinstalling, start a new OMP process (or reload its extensions) before retesting. Existing OMP processes retain extension modules loaded at startup.
+
 For development:
 
 ```bash
