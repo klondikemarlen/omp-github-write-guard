@@ -7,7 +7,7 @@ Opt-in OMP extension that requires one standard OMP Ask approval before a mutati
 - Local `write` and structured `edit` operations, including both endpoints of an `edit` move.
 - `git push`, including default, configured, named, SSH, and HTTPS remotes.
 - `gh issue` creation and updates, `gh pr` creation and updates, and mutating `gh api` requests.
-- Supported `xd://github` issue and pull-request writes. Registered internal dispatch targets `xd://lsp` and `xd://report_issue` pass through their handlers; unknown URI targets remain unresolved and blocked. Known read-only operations remain silent; unsupported device operations block without a target.
+- Supported `xd://github` issue and pull-request writes. Registered internal dispatch targets `xd://lsp`, `xd://report_issue`, `xd://recall`, `xd://retain`, `xd://reflect`, and `xd://memory_edit` pass through their handlers; unknown URI targets remain unresolved and blocked. Known read-only operations remain silent; unsupported device operations block without a target.
 
 The active boundary is the invoking session's normalized GitHub `origin`, or its canonical Git root when no GitHub origin exists. Local targets resolve through their containing checkout with the same identity. Tool `cwd`, a shell `cd … &&`, and Git `-C` resolve a mutation target, but never redefine the active boundary. Nested directories, worktrees, and separate local clones of the same repository stay inside the boundary.
 
