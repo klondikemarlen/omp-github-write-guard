@@ -22,11 +22,12 @@ export function createRepositoryBoundaryGuard(): (pi: ExtensionAPI) => void {
 
       const authorizationResult = authorization.consume(handoff.fingerprint);
       if (authorizationResult === "authorized") return;
+      const question = handoff.ask.questions[0].question;
+      if (authorization.consumeExternal(handoff.fingerprint, question)) return;
       const authorizationDetail =
         authorizationResult === "mismatched"
           ? " An approval exists but does not match this exact retry."
           : " No matching approval was recorded.";
-      const question = handoff.ask.questions[0].question;
       if (!authorization.begin(handoff.fingerprint, question)) {
         return { block: true, reason: `${reason}${authorizationDetail} A confirmation is already pending.` };
       }

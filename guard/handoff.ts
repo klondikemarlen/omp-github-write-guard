@@ -10,7 +10,7 @@ import { recognizedGitHubWrite } from "../github/recognized-write.ts";
 import { reviewThreadRepository } from "../github/review-thread-repository.ts";
 import type { GitHubWrite } from "../github/write.ts";
 import { toolDirectory } from "../shell/directory.ts";
-import { shellCommands } from "../shell/commands.ts";
+import { hasBoundaryOverride, shellCommands } from "../shell/commands.ts";
 import { authorizationKey } from "./authorization-key.ts";
 import { confirmationQuestion, confirmationQuestionId } from "./confirmation-question.ts";
 import { guardDecision } from "./decision.ts";
@@ -31,6 +31,11 @@ export type RepositoryMutationHandoff =
   | { decision: "ask"; action: string; currentRepository?: string; target: string; fingerprint: string; ask: AskPayload }
   | { decision: "block"; action: string; currentRepository?: string; target?: string; reason: string };
 
+function hasExplicitBoundaryOverride(event: ToolCallEvent): boolean {
+  if ((event.toolName === "write" || event.toolName === "edit") && event.input.boundaryOverride === "allow-mixed") return true;
+  return event.toolName === "bash" && typeof event.input.command === "string" && hasBoundaryOverride(event.input.command);
+}
+
 function writeFor(event: ToolCallEvent): GitHubWrite | undefined {
   if (event.toolName === "write") return recognizedGitHubWrite(event.input);
   if (event.toolName !== "bash" || typeof event.input.command !== "string") return undefined;
@@ -50,7 +55,7 @@ function askHandoff(
   currentRepository?: string,
   description?: string,
 ): RepositoryMutationHandoff {
-  const question = confirmationQuestion(action, target, event.input, description);
+  const question = confirmationQuestion(action, target, event.input, description, currentRepository);
   return {
     decision: "ask",
     action,
@@ -77,7 +82,8 @@ function githubHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHan
   if (!write) return { decision: "allow" };
 
   const inputDirectory = toolDirectory(event.input, cwd);
-  const toolCwd = inputDirectory ?? cwd;
+  const toolCwd = typeof inputDirectory === "string" ? inputDirectory : cwd;
+  if (inputDirectory && typeof inputDirectory !== "string") write.targetUnresolved = true;
   const commandCwd = write.directories?.reduce((directoryCwd, directory) => resolve(directoryCwd, directory), toolCwd) ?? toolCwd;
   if (write.action === "git push" && !write.targetUnresolved) {
     const remote = write.remote ?? defaultPushRemote(commandCwd);
@@ -125,7 +131,13 @@ function localHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHand
 }
 
 export function repositoryMutationHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHandoff {
+  const allowMixed = hasExplicitBoundaryOverride(event);
   const github = githubHandoff(event, cwd);
+  if (github.decision === "ask" && allowMixed) {
+    return { decision: "allow", action: github.action, currentRepository: github.currentRepository, target: github.target };
+  }
   if (github.decision !== "allow") return github;
-  return localHandoff(event, cwd) ?? github;
+  const local = localHandoff(event, cwd);
+  if (local?.decision === "ask" && allowMixed) return { decision: "allow", action: local.action, target: local.target };
+  return local ?? github;
 }

@@ -1,11 +1,12 @@
 import type { ToolResultEvent } from "./contract.ts";
-import { isApprovedConfirmation } from "../guard/approved-confirmation.ts";
+import { approvedExternalQuestion, isApprovedConfirmation, isApprovedExternalConfirmation } from "../guard/approved-confirmation.ts";
 
 export type AuthorizationResult = "authorized" | "missing" | "mismatched";
 
 export class AuthorizationState {
   #pending: { key: string; question: string } | undefined;
   #authorizedKey: string | undefined;
+  #externalQuestion: string | undefined;
   #sessionDirectory: string | undefined;
 
   resetFor(directory: string): void {
@@ -13,15 +14,21 @@ export class AuthorizationState {
     this.#sessionDirectory = directory;
     this.#pending = undefined;
     this.#authorizedKey = undefined;
+    this.#externalQuestion = undefined;
   }
 
   record(event: ToolResultEvent): void {
-    if (event.toolName !== "ask" || !this.#pending) return;
+    if (event.toolName !== "ask" || event.isError) return;
 
     const pending = this.#pending;
+    const externalQuestion = approvedExternalQuestion(event.input, event.details);
+    if (!pending) return;
+
     this.#pending = undefined;
-    if (!event.isError && isApprovedConfirmation(event.input, event.details, pending.question)) {
+    if (isApprovedConfirmation(event.input, event.details, pending.question)) {
       this.#authorizedKey = pending.key;
+    } else if (externalQuestion && isApprovedExternalConfirmation(event.input, event.details, pending.question)) {
+      this.#externalQuestion = externalQuestion;
     }
   }
 
@@ -30,6 +37,19 @@ export class AuthorizationState {
     this.#authorizedKey = undefined;
     if (!authorizedKey) return "missing";
     return authorizedKey === key ? "authorized" : "mismatched";
+  }
+
+  consumeExternal(key: string, question: string): boolean {
+    if (!this.#externalQuestion) return false;
+    const storedEnd = this.#externalQuestion.indexOf("\n");
+    const expectedEnd = question.indexOf("\n");
+    if (
+      this.#externalQuestion.slice(0, storedEnd < 0 ? this.#externalQuestion.length : storedEnd) !==
+      question.slice(0, expectedEnd < 0 ? question.length : expectedEnd)
+    ) return false;
+    this.#externalQuestion = undefined;
+    this.#authorizedKey = key;
+    return true;
   }
 
   begin(key: string, question: string): boolean {

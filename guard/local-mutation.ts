@@ -1,10 +1,19 @@
-import { existsSync, realpathSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { ToolCallEvent } from "../extension/contract.ts";
 import { currentCheckoutBoundary } from "../git/current-checkout.ts";
 import { toolDirectory } from "../shell/directory.ts";
+
+function pathExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export type LocalMutation = {
   action: string;
@@ -15,20 +24,46 @@ export type LocalMutation = {
 
 function canonicalTarget(path: string, cwd: string): string | undefined {
   let candidate = resolve(cwd, path);
-  const missing: string[] = [];
 
-  while (!existsSync(candidate)) {
-    const parent = dirname(candidate);
-    if (parent === candidate) return undefined;
-    missing.unshift(basename(candidate));
-    candidate = parent;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const parts = candidate.split(sep).filter(Boolean);
+    let current: string = sep;
+    let restarted = false;
+    let missingIndex = parts.length;
+
+    for (let index = 0; index < parts.length; index += 1) {
+      const next = resolve(current, parts[index]);
+      let stat;
+      try {
+        stat = lstatSync(next);
+      } catch {
+        missingIndex = index;
+        break;
+      }
+
+      if (stat.isSymbolicLink()) {
+        let link: string;
+        try {
+          link = readlinkSync(next);
+        } catch {
+          return undefined;
+        }
+        candidate = resolve(isAbsolute(link) ? link : dirname(next), link, ...parts.slice(index + 1));
+        restarted = true;
+        break;
+      }
+      current = next;
+    }
+
+    if (restarted) continue;
+    try {
+      return resolve(realpathSync(current), ...parts.slice(missingIndex));
+    } catch {
+      return undefined;
+    }
   }
 
-  try {
-    return resolve(realpathSync(candidate), ...missing);
-  } catch {
-    return undefined;
-  }
+  return undefined;
 }
 
 const REGISTERED_INTERNAL_TARGETS: Record<string, true> = {
@@ -60,12 +95,22 @@ function isTemporaryTarget(path: string): boolean {
 
 function containingBoundary(path: string): string | undefined {
   let directory = dirname(path);
-  while (!existsSync(directory)) {
+  while (!pathExists(directory)) {
     const parent = dirname(directory);
     if (parent === directory) return undefined;
     directory = parent;
   }
-  return currentCheckoutBoundary(directory);
+  while (pathExists(directory)) {
+    try {
+      if (!lstatSync(directory).isSymbolicLink()) return currentCheckoutBoundary(directory);
+    } catch {
+      return undefined;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+  return undefined;
 }
 
 
@@ -113,19 +158,27 @@ export function localMutation(event: ToolCallEvent, sessionCwd: string): LocalMu
     return { action: mutation.action, boundary, reason: "the local file target cannot be resolved" };
   }
 
-  const cwd = toolDirectory(event.input, sessionCwd) ?? sessionCwd;
+  const resolvedCwd = toolDirectory(event.input, sessionCwd);
+  if (resolvedCwd && typeof resolvedCwd !== "string") {
+    return { action: mutation.action, boundary, reason: "the command directory cannot be resolved safely" };
+  }
+  const cwd = resolvedCwd ?? sessionCwd;
+  const sources: string[] = [];
   const targets: string[] = [];
   for (const path of mutation.paths) {
+    const source = resolve(cwd, path);
     const target = canonicalTarget(path, cwd);
     if (!target) return { action: mutation.action, boundary, reason: "the local file target cannot be resolved" };
+    sources.push(source);
     targets.push(target);
   }
 
   const externalTargets = [
     ...new Set(
-      targets.filter((target) => {
+      targets.filter((target, index) => {
         const targetBoundary = containingBoundary(target);
-        return targetBoundary !== boundary && !(isTemporaryTarget(target) && !targetBoundary);
+        const sourceBoundary = containingBoundary(sources[index]);
+        return targetBoundary !== boundary && !(isTemporaryTarget(target) && !targetBoundary && !sourceBoundary);
       }),
     ),
   ];
