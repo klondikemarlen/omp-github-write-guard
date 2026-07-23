@@ -690,6 +690,32 @@ test("allows one approved GitHub issue retry despite changed tool intent", async
   }
 });
 
+test("does not consume approval when the retry has no UI", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    const event = {
+      toolName: "write",
+      input: {
+        i: "create issue",
+        path: "xd://github",
+        content: JSON.stringify({ op: "issue_create", repo: external, title: "UI-bound issue" }),
+      },
+    };
+    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+    approve(instance, "GitHub issue creation", external, "\nIssue title: UI-bound issue");
+
+    expect(await instance.handler(event, context(repository, false))).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("Interactive confirmation requires OMP UI"),
+    });
+    expect(await instance.handler(event, context(repository))).toBeUndefined();
+    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("blocks an approved GitHub issue retry when its payload changes", async () => {
   const repository = checkout();
   try {

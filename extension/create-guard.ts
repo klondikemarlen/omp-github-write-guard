@@ -17,15 +17,15 @@ export function createRepositoryBoundaryGuard(): (pi: ExtensionAPI) => void {
         };
       }
 
+      const reason = `Blocked ${handoff.action} targeting ${handoff.target}: confirmation is required.`;
+      if (!context.hasUI) return { block: true, reason: `${reason} Interactive confirmation requires OMP UI.` };
+
       const authorizationResult = authorization.consume(handoff.fingerprint);
       if (authorizationResult === "authorized") return;
-
-      const reason = `Blocked ${handoff.action} targeting ${handoff.target}: confirmation is required.`;
       const authorizationDetail =
         authorizationResult === "mismatched"
           ? " An approval exists but does not match this exact retry."
           : " No matching approval was recorded.";
-      if (!context.hasUI) return { block: true, reason: `${reason}${authorizationDetail} Interactive confirmation requires OMP UI.` };
       const question = handoff.ask.questions[0].question;
       if (!authorization.begin(handoff.fingerprint, question)) {
         return { block: true, reason: `${reason}${authorizationDetail} A confirmation is already pending.` };
