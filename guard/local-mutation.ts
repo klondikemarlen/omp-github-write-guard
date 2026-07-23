@@ -1,5 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { ToolCallEvent } from "../extension/contract.ts";
 import { currentCheckoutBoundary } from "../git/current-checkout.ts";
@@ -29,6 +30,33 @@ function canonicalTarget(path: string, cwd: string): string | undefined {
     return undefined;
   }
 }
+
+const REGISTERED_INTERNAL_TARGETS: Record<string, true> = {
+  "xd://github": true,
+  "xd://lsp": true,
+  "xd://report_issue": true,
+};
+
+const URI_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+
+function isTemporaryTarget(path: string): boolean {
+  let temporaryRoot: string;
+  try {
+    temporaryRoot = realpathSync(tmpdir());
+  } catch {
+    return false;
+  }
+
+  const fromTemporaryRoot = relative(temporaryRoot, path);
+  return (
+    fromTemporaryRoot === "" ||
+    (!isAbsolute(fromTemporaryRoot) &&
+      fromTemporaryRoot !== ".." &&
+      !fromTemporaryRoot.startsWith(`..${sep}`))
+  );
+}
+
 
 function containingBoundary(path: string): string | undefined {
   let directory = dirname(path);
@@ -60,14 +88,17 @@ function editPaths(input: Record<string, unknown>): string[] | undefined {
 function mutationPaths(event: ToolCallEvent): { action: string; paths: string[] } | undefined {
   if (event.toolName === "write") {
     if (typeof event.input.path !== "string") return { action: "file write", paths: [] };
-    if (event.input.path === "xd://github") return undefined;
-    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(event.input.path)) return { action: "file write", paths: [] };
+    if (Object.hasOwn(REGISTERED_INTERNAL_TARGETS, event.input.path)) return undefined;
+    if (URI_SCHEME.test(event.input.path)) return { action: "file write", paths: [] };
     return { action: "file write", paths: [event.input.path] };
   }
 
   if (event.toolName !== "edit") return undefined;
   const paths = editPaths(event.input);
-  return { action: "file edit", paths: paths ?? [] };
+  if (!paths) return { action: "file edit", paths: [] };
+  const localPaths = paths.filter((path) => !Object.hasOwn(REGISTERED_INTERNAL_TARGETS, path));
+  if (localPaths.some((path) => URI_SCHEME.test(path))) return { action: "file edit", paths: [] };
+  return localPaths.length ? { action: "file edit", paths: localPaths } : undefined;
 }
 
 export function localMutation(event: ToolCallEvent, sessionCwd: string): LocalMutation | undefined {
@@ -90,6 +121,13 @@ export function localMutation(event: ToolCallEvent, sessionCwd: string): LocalMu
     targets.push(target);
   }
 
-  const externalTargets = [...new Set(targets.filter((target) => containingBoundary(target) !== boundary))];
+  const externalTargets = [
+    ...new Set(
+      targets.filter((target) => {
+        const targetBoundary = containingBoundary(target);
+        return targetBoundary !== boundary && !(isTemporaryTarget(target) && !targetBoundary);
+      }),
+    ),
+  ];
   return externalTargets.length ? { action: mutation.action, boundary, targets: externalTargets } : undefined;
 }
