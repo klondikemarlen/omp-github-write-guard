@@ -70,6 +70,10 @@ const REGISTERED_INTERNAL_TARGETS: Record<string, true> = {
   "xd://github": true,
   "xd://lsp": true,
   "xd://report_issue": true,
+  "xd://recall": true,
+  "xd://retain": true,
+  "xd://reflect": true,
+  "xd://memory_edit": true,
 };
 
 const URI_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;

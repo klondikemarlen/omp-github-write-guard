@@ -943,7 +943,7 @@ test("passes registered internal dispatch through and blocks unknown URIs", asyn
   const repository = checkout();
   try {
     const instance = guard();
-    for (const path of ["xd://lsp", "xd://report_issue"]) {
+    for (const path of ["xd://lsp", "xd://report_issue", "xd://recall", "xd://retain", "xd://reflect", "xd://memory_edit"]) {
       expect(await instance.handler(
         { toolName: "write", input: { path, content: "" } },
         context(repository),
