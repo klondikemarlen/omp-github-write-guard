@@ -33,6 +33,13 @@ omp plugin install github:klondikemarlen/omp-repository-boundary-guard
 
 After installing or reinstalling, start a new OMP process (or reload its extensions) before retesting. Existing OMP processes retain extension modules loaded at startup.
 
+If `omp-github-write-guard` is installed from the historical package name, remove it before installing this replacement. Running both guards creates competing confirmation flows.
+
+```bash
+omp plugin uninstall omp-github-write-guard
+omp plugin install github:klondikemarlen/omp-repository-boundary-guard
+```
+
 For development:
 
 ```bash
