@@ -19,9 +19,9 @@ if (latestTag) {
   if (!/^\d+\.\d+\.\d+$/.test(tagVersion)) throw new Error(`latest tag ${latestTag} is not a semantic version`);
   const current = packageVersion.split(".").map(Number);
   const previous = tagVersion.split(".").map(Number);
-  if (current.every((part, index) => part === previous[index])) {
-    throw new Error(`package version ${packageVersion} is unchanged from ${latestTag}; bump it before release`);
-  }
+  const differingPart = current.findIndex((part, index) => part !== previous[index]);
+  if (differingPart < 0) throw new Error(`package version ${packageVersion} is unchanged from ${latestTag}; bump it before release`);
+  if (current[differingPart] < previous[differingPart]) throw new Error(`package version ${packageVersion} is older than ${latestTag}`);
 }
 
 console.log(`release version ${packageVersion}${latestTag ? ` (after ${latestTag})` : ""}`);
