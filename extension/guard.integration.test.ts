@@ -664,6 +664,122 @@ test("shows and safely serializes GitHub device issue titles in confirmations", 
   }
 });
 
+test("allows one approved GitHub issue retry despite changed tool intent", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    const content = JSON.stringify({ op: "issue_create", repo: external, title: "Intent-independent issue" });
+    const event = {
+      toolName: "write",
+      input: { i: "create issue", path: "xd://github", content },
+    };
+    expect(await instance.handler(event, context(repository))).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("No matching approval was recorded"),
+    });
+    approve(instance, "GitHub issue creation", external, "\nIssue title: Intent-independent issue");
+
+    const retry = {
+      toolName: "write",
+      input: { ...event.input, i: "retry approved issue" },
+    };
+    expect(await instance.handler(retry, context(repository))).toBeUndefined();
+    expect(await instance.handler(retry, context(repository))).toMatchObject({ block: true });
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("does not consume approval when the retry has no UI", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    const event = {
+      toolName: "write",
+      input: {
+        i: "create issue",
+        path: "xd://github",
+        content: JSON.stringify({ op: "issue_create", repo: external, title: "UI-bound issue" }),
+      },
+    };
+    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+    approve(instance, "GitHub issue creation", external, "\nIssue title: UI-bound issue");
+
+    expect(await instance.handler(event, context(repository, false))).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("Interactive confirmation requires OMP UI"),
+    });
+    expect(await instance.handler(event, context(repository))).toBeUndefined();
+    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("blocks an approved GitHub issue retry when its payload changes", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    const original = {
+      toolName: "write",
+      input: {
+        i: "create issue",
+        path: "xd://github",
+        content: JSON.stringify({ op: "issue_create", repo: external, title: "Original issue" }),
+      },
+    };
+    expect(await instance.handler(original, context(repository))).toMatchObject({ block: true });
+    approve(instance, "GitHub issue creation", external, "\nIssue title: Original issue");
+
+    const changed = {
+      toolName: "write",
+      input: {
+        ...original.input,
+        i: "retry changed issue",
+        content: JSON.stringify({ op: "issue_create", repo: external, title: "Changed issue" }),
+      },
+    };
+    expect(await instance.handler(changed, context(repository))).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("does not match this exact retry"),
+    });
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("blocks an approved GitHub issue retry for another repository", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    const original = {
+      toolName: "write",
+      input: {
+        i: "create issue",
+        path: "xd://github",
+        content: JSON.stringify({ op: "issue_create", repo: external, title: "Repository-bound issue" }),
+      },
+    };
+    expect(await instance.handler(original, context(repository))).toMatchObject({ block: true });
+    approve(instance, "GitHub issue creation", external, "\nIssue title: Repository-bound issue");
+
+    const changedRepository = {
+      toolName: "write",
+      input: {
+        ...original.input,
+        i: "retry another repository",
+        content: JSON.stringify({ op: "issue_create", repo: "elsewhere/other-example", title: "Repository-bound issue" }),
+      },
+    };
+    expect(await instance.handler(changedRepository, context(repository))).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("does not match this exact retry"),
+    });
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("does not prompt same-origin issue creation", async () => {
   const repository = checkout();
   try {
