@@ -1,18 +1,18 @@
 {
-  "name": "omp-github-write-guard",
-  "version": "0.6.2",
-  "description": "Opt-in OMP confirmation guard for mutations outside the current repository.",
+  "name": "omp-repository-boundary-guard",
+  "version": "0.7.0",
+  "description": "Opt-in OMP confirmation guard for mutations outside the active repository boundary.",
   "type": "module",
   "scripts": {
     "test": "bun test",
     "release:check": "tsc --noEmit && bun test",
     "handoff": "bun run bin/repository-mutation-handoff.ts",
-    "reinstall": "omp plugin install github:klondikemarlen/omp-github-write-guard"
+    "reinstall": "omp plugin install github:klondikemarlen/omp-repository-boundary-guard"
   },
-  "keywords": ["omp-plugin", "github", "safety"],
+  "keywords": ["omp-plugin", "repository-boundary", "safety"],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/klondikemarlen/omp-github-write-guard.git"
+    "url": "git+https://github.com/klondikemarlen/omp-repository-boundary-guard.git"
   },
   "omp": {
     "extensions": ["./index.ts"]

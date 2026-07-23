@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "omp-github-write-guard",
+      "name": "omp-repository-boundary-guard",
       "dependencies": {
         "shell-quote": "^1.10.0",
       },

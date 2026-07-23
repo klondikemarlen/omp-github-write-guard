@@ -10,7 +10,7 @@ import {
   type ToolCallHandler,
 } from "../index.ts";
 
-const current = "klondikemarlen/omp-github-write-guard";
+const current = "klondikemarlen/omp-repository-boundary-guard";
 const external = "elsewhere/example";
 const confirmationId = "confirm_repository_boundary_mutation";
 
@@ -35,7 +35,7 @@ function guard(): Guard {
 }
 
 function checkout(remote: string | null = `https://github.com/${current}.git`) {
-  const directory = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const directory = `/tmp/omp-repository-boundary-guard-${crypto.randomUUID()}`;
   mkdirSync(directory, { recursive: true });
   execFileSync("git", ["-C", directory, "init", "--quiet"]);
   if (remote) execFileSync("git", ["-C", directory, "remote", "add", "origin", remote]);
@@ -71,7 +71,7 @@ test("resolves nested checkout origins", () => {
 
 test("resolves worktree origins", () => {
   const repository = checkout();
-  const worktree = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const worktree = `/tmp/omp-repository-boundary-guard-${crypto.randomUUID()}`;
   try {
     execFileSync("git", ["-C", repository, "-c", "user.name=Guard", "-c", "user.email=guard@example.test", "commit", "--allow-empty", "-m", "initial"]);
     execFileSync("git", ["-C", repository, "worktree", "add", worktree, "-b", "feature"]);
@@ -84,7 +84,7 @@ test("resolves worktree origins", () => {
 
 test("permits mutations in local-only Git worktrees", async () => {
   const repository = checkout(null);
-  const worktree = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const worktree = `/tmp/omp-repository-boundary-guard-${crypto.randomUUID()}`;
   const nested = `${repository}/nested`;
   try {
     execFileSync("git", ["-C", repository, "-c", "user.name=Guard", "-c", "user.email=guard@example.test", "commit", "--allow-empty", "-m", "initial"]);
@@ -104,7 +104,7 @@ test("permits mutations in local-only Git worktrees", async () => {
 
 test("keeps same-origin GitHub writes inside a worktree", async () => {
   const repository = checkout();
-  const worktree = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const worktree = `/tmp/omp-repository-boundary-guard-${crypto.randomUUID()}`;
   const otherCheckout = checkout(`git@github.com:${external}.git`);
   try {
     execFileSync("git", ["-C", repository, "-c", "user.name=Guard", "-c", "user.email=guard@example.test", "commit", "--allow-empty", "-m", "initial"]);
@@ -263,7 +263,7 @@ test("resolves write targets without redefining the active repository boundary",
 test("anchors GitHub mutation authorization to the active checkout", () => {
   const repository = checkout();
   const otherCheckout = checkout(`git@github.com:${external}.git`);
-  const unresolved = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const unresolved = `/tmp/omp-repository-boundary-guard-${crypto.randomUUID()}`;
   mkdirSync(unresolved);
   try {
     const otherFromRepository = relative(repository, otherCheckout);
@@ -720,7 +720,7 @@ test("permits approved target-explicit pull request and issue mutations", async 
 });
 
 test("blocks targetless pull request mutations outside a GitHub checkout", () => {
-  const unresolved = `/tmp/omp-github-write-guard-${crypto.randomUUID()}`;
+  const unresolved = `/tmp/omp-repository-boundary-guard-${crypto.randomUUID()}`;
   mkdirSync(unresolved);
   try {
     expect(
