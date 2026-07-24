@@ -839,6 +839,30 @@ test("allows an approved unresolved review-thread retry", async () => {
   }
 });
 
+test("consumes an external approval recorded before the first retry", async () => {
+  const repository = checkout(null);
+  const command = `gh api --method PATCH repos/${external}/issues/6458 -f body="$ISSUE_BODY" --jq .html_url`;
+  const event = { toolName: "bash", input: { command } };
+  try {
+    const instance = guard();
+    instance.answer({
+      toolName: "ask",
+      input: {
+        questions: [{
+          id: "confirm_external_github_write",
+          question: `Allow one GitHub API write to ${external}?\nCommand: ${command}`,
+        }],
+      },
+      details: { selectedOptions: ["Approve"] },
+      isError: false,
+    });
+    expect(await instance.handler(event, context(repository))).toBeUndefined();
+    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 
 test("shows and safely serializes GitHub device issue titles in confirmations", async () => {
   const repository = checkout();

@@ -39,9 +39,8 @@ test("clears pending authorization when the checkout changes", () => {
   expect(state.begin("next", question)).toBe(true);
 });
 
-test("does not retain an external approval without a pending request", () => {
+test("retains an external approval without a pending request", () => {
   const state = new AuthorizationState();
-  state.resetFor("/checkout");
   state.record({
     toolName: "ask",
     input: {
@@ -50,6 +49,7 @@ test("does not retain an external approval without a pending request", () => {
     details: { selectedOptions: ["Approve"] },
     isError: false,
   });
-  expect(state.consumeExternal("key", "Allow one GitHub issue creation to elsewhere/example?")).toBe(false);
-  expect(state.begin("key", "Allow one GitHub issue creation to elsewhere/example?")).toBe(true);
+  state.resetFor("/checkout");
+  expect(state.consumeExternal("Allow one GitHub issue creation to elsewhere/example?")).toBe(true);
+  expect(state.consume("key")).toBe("missing");
 });

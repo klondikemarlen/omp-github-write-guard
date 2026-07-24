@@ -10,6 +10,10 @@ export class AuthorizationState {
   #sessionDirectory: string | undefined;
 
   resetFor(directory: string): void {
+    if (this.#sessionDirectory === undefined) {
+      this.#sessionDirectory = directory;
+      return;
+    }
     if (this.#sessionDirectory === directory) return;
     this.#sessionDirectory = directory;
     this.#pending = undefined;
@@ -22,7 +26,10 @@ export class AuthorizationState {
 
     const pending = this.#pending;
     const externalQuestion = approvedExternalQuestion(event.input, event.details);
-    if (!pending) return;
+    if (!pending) {
+      if (externalQuestion) this.#externalQuestion = externalQuestion;
+      return;
+    }
 
     this.#pending = undefined;
     if (isApprovedConfirmation(event.input, event.details, pending.question)) {
@@ -39,7 +46,7 @@ export class AuthorizationState {
     return authorizedKey === key ? "authorized" : "mismatched";
   }
 
-  consumeExternal(key: string, question: string): boolean {
+  consumeExternal(question: string): boolean {
     if (!this.#externalQuestion) return false;
     const storedEnd = this.#externalQuestion.indexOf("\n");
     const expectedEnd = question.indexOf("\n");
@@ -48,7 +55,6 @@ export class AuthorizationState {
       question.slice(0, expectedEnd < 0 ? question.length : expectedEnd)
     ) return false;
     this.#externalQuestion = undefined;
-    this.#authorizedKey = key;
     return true;
   }
 
