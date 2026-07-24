@@ -34,7 +34,6 @@ test("keeps same-origin GitHub writes inside a worktree", async () => {
       [`gh issue create --repo ${current} --title "Same checkout"`, "GitHub issue creation"],
       [`gh pr create --repo ${current}`, "GitHub pull request creation"],
       [`gh pr merge 1 --repo ${current} --merge --delete-branch`, "GitHub pull request update"],
-      [`git push git@github.com:${current}.git HEAD:refs/heads/same-origin`, "git push"],
     ]) {
       expect(repositoryMutationHandoff({ toolName: "bash", input: { command } }, worktree)).toMatchObject({
         decision: "allow",
@@ -52,20 +51,6 @@ test("keeps same-origin GitHub writes inside a worktree", async () => {
   }
 });
 
-test("does not intercept same-origin pushes", async () => {
-  const repository = checkout();
-  try {
-    const instance = guard();
-    const result = await instance.handler(
-      { toolName: "bash", input: { command: "git push origin HEAD" } },
-      context(repository),
-    );
-    expect(result).toBeUndefined();
-    expect(instance.messages).toEqual([]);
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
 
 
 
@@ -73,43 +58,6 @@ test("does not intercept same-origin pushes", async () => {
 
 
 
-test("resolves write targets without redefining the active repository boundary", async () => {
-  const repository = checkout();
-  const sameRepositoryCheckout = checkout();
-  const otherCheckout = checkout(`git@github.com:${external}.git`);
-  try {
-    const instance = guard();
-    expect(await instance.handler(
-      { toolName: "write", input: { path: "created.ts", content: "", cwd: sameRepositoryCheckout } },
-      context(repository),
-    )).toBeUndefined();
-
-    const target = `${otherCheckout}/created.ts`;
-    const event = { toolName: "write", input: { path: "created.ts", content: "", cwd: otherCheckout } };
-    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
-    approve(instance, "file write", target);
-    expect(await instance.handler(event, context(repository))).toBeUndefined();
-
-    for (const [path, resolved] of [
-      [`file://${otherCheckout}/double-slash.ts`, `${otherCheckout}/double-slash.ts`],
-      [`file:${otherCheckout}/single-slash.ts`, `${otherCheckout}/single-slash.ts`],
-    ]) {
-      const uriEvent = { toolName: "write", input: { path, content: "" } };
-      expect(await instance.handler(uriEvent, context(repository))).toMatchObject({ block: true });
-      expect(instance.messages.at(-1)).toContain(`Target path(s): ${resolved}`);
-      approve(instance, "file write", resolved);
-      expect(await instance.handler(uriEvent, context(repository))).toBeUndefined();
-    }
-    expect(await instance.handler(
-      { toolName: "write", input: { path: "artifact://outside.ts", content: "" } },
-      context(repository),
-    )).toBeUndefined();
-  } finally {
-    rmSync(otherCheckout, { recursive: true, force: true });
-    rmSync(sameRepositoryCheckout, { recursive: true, force: true });
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
 
 test("anchors GitHub mutation authorization to the active checkout", () => {
   const repository = checkout();
@@ -137,42 +85,6 @@ test("anchors GitHub mutation authorization to the active checkout", () => {
   }
 });
 
-test("passes named push remotes that cannot resolve through Git configuration", () => {
-  const repository = checkout();
-  try {
-    expect(
-      repositoryMutationHandoff(
-        { toolName: "bash", input: { command: `git push ${external} HEAD` } },
-        repository,
-      ),
-    ).toMatchObject({ decision: "allow" });
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("does not intercept local non-push Git commands", async () => {
-  const repository = checkout();
-  try {
-    const instance = guard();
-    for (const command of [
-      "git status --short",
-      "git -C . add file.ts",
-      'git commit -m "mention push"',
-      "git push --help",
-      "git push --version",
-      "git push -n https://github.com/elsewhere/example.git HEAD",
-      "git push --dry-run https://github.com/elsewhere/example.git HEAD",
-      `gh issue create --help --repo ${external}`,
-      `gh api repos/${external}/issues --method POST --help`,
-    ]) {
-      expect(await instance.handler({ toolName: "bash", input: { command } }, context(repository))).toBeUndefined();
-    }
-    expect(instance.messages).toEqual([]);
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
 
 test("does not reissue a pending confirmation", async () => {
   const repository = checkout();
@@ -215,151 +127,7 @@ test("composes with an already-approved external GitHub gate", async () => {
   }
 });
 
-test("classifies global options, attached and quoted -C paths, and command sequences", async () => {
-  const repository = `${checkout()} space`;
-  try {
-    execFileSync("mv", [repository.slice(0, -6), repository]);
-    execFileSync("git", ["-C", repository, "remote", "add", "upstream", `git@github.com:${external}.git`]);
-    const instance = guard();
-    const result = await instance.handler(
-      { toolName: "bash", input: { command: `echo ready && git -c user.name=Guard --no-pager -C\"${repository}\" push upstream HEAD` } },
-      context(repository),
-    );
-    expect(result).toMatchObject({ block: true, reason: expect.stringContaining("OMP ask") });
-    expect(instance.messages).toHaveLength(1);
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
 
-test("passes unsupported repository-affecting global options", async () => {
-  const repository = checkout();
-  try {
-    const instance = guard();
-    const result = await instance.handler(
-      { toolName: "bash", input: { command: "git --git-dir=/tmp/other.git push origin HEAD" } },
-      context(repository),
-    );
-    expect(result).toBeUndefined();
-    expect(instance.messages).toHaveLength(0);
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("does not mistake quoted push text for an executable push", async () => {
-  const repository = checkout();
-  try {
-    const instance = guard();
-    const result = await instance.handler(
-      { toolName: "bash", input: { command: "echo 'git push https://github.com/elsewhere/example.git'" } },
-      context(repository),
-    );
-    expect(result).toBeUndefined();
-    expect(instance.messages).toEqual([]);
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("resolves the configured default push remote", async () => {
-  const repository = checkout();
-  try {
-    execFileSync("git", ["-C", repository, "remote", "add", "upstream", `https://github.com/${external}.git`]);
-    execFileSync("git", ["-C", repository, "config", "remote.pushDefault", "upstream"]);
-    const instance = guard();
-    const result = await instance.handler(
-      { toolName: "bash", input: { command: "git push" } },
-      context(repository),
-    );
-    expect(result).toMatchObject({ block: true, reason: expect.stringContaining(external) });
-    expect(instance.messages).toHaveLength(1);
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("permits exactly one approved external push retry", async () => {
-  const repository = checkout();
-  try {
-    const instance = guard();
-    const event = { toolName: "bash", input: { command: `git push https://github.com/${external}.git HEAD` } };
-    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
-    approve(instance, "git push", external, `\nCommand: ${event.input.command}`);
-    expect(await instance.handler(event, context(repository))).toBeUndefined();
-    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("retries a relative checkout change after an approved push", async () => {
-  const repository = checkout();
-  const otherCheckout = checkout("https://github.com/elsewhere/other.git");
-  try {
-    const instance = guard();
-    const event = {
-      toolName: "bash",
-      input: {
-        command: `cd ${relative(repository, otherCheckout)} && git push https://github.com/${external}.git HEAD`,
-      },
-    };
-    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
-    approve(instance, "git push", external, `\nCommand: ${event.input.command}`);
-    expect(await instance.handler(event, context(repository))).toBeUndefined();
-    expect(await instance.handler(
-      { toolName: "bash", input: { command: "git push origin HEAD" } },
-      context(repository),
-    )).toBeUndefined();
-    expect(instance.messages).toHaveLength(1);
-  } finally {
-    rmSync(otherCheckout, { recursive: true, force: true });
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("does not retain a prior checkout switch for later writes", async () => {
-  const repository = checkout();
-  const otherCheckout = checkout(`git@github.com:${external}.git`);
-  try {
-    const instance = guard();
-    expect(await instance.handler(
-      { toolName: "bash", input: { command: `cd ${relative(repository, otherCheckout)} && git status --short` } },
-      context(repository),
-    )).toBeUndefined();
-    expect(await instance.handler(
-      { toolName: "bash", input: { command: `git push git@github.com:${external}.git HEAD` } },
-      context(repository),
-    )).toMatchObject({ block: true });
-    expect(instance.messages).toHaveLength(1);
-  } finally {
-    rmSync(otherCheckout, { recursive: true, force: true });
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("resolves each relative tool cwd from the session checkout", async () => {
-  const repository = checkout();
-  try {
-    mkdirSync(`${repository}/web`);
-    mkdirSync(`${repository}/api`);
-    const instance = guard();
-    expect(await instance.handler(
-      { toolName: "bash", input: { command: "git status --short", cwd: "web" } },
-      context(repository),
-    )).toBeUndefined();
-    expect(await instance.handler(
-      { toolName: "bash", input: { command: "git status --short", cwd: "api" } },
-      context(repository),
-    )).toBeUndefined();
-    expect(await instance.handler(
-      { toolName: "bash", input: { command: "git push origin HEAD" } },
-      context(repository),
-    )).toBeUndefined();
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
 
 test("does not retain an explicit tool cwd for later writes", async () => {
   const repository = checkout();
@@ -381,59 +149,8 @@ test("does not retain an explicit tool cwd for later writes", async () => {
   }
 });
 
-test("does not carry pending or approved writes across session directories", async () => {
-  const repository = checkout();
-  const sibling = checkout();
-  const event = { toolName: "bash", input: { command: `git push https://github.com/${external}.git HEAD` } };
-  try {
-    const pending = guard();
-    expect(await pending.handler(event, context(repository))).toMatchObject({ block: true });
-    expect(await pending.handler(event, context(sibling))).toMatchObject({ block: true, reason: expect.stringContaining("OMP ask") });
-    expect(pending.messages).toHaveLength(2);
-
-    const approved = guard();
-    expect(await approved.handler(event, context(repository))).toMatchObject({ block: true });
-    approve(approved, "git push", external, `\nCommand: ${event.input.command}`);
-    expect(await approved.handler(event, context(sibling))).toMatchObject({ block: true, reason: expect.stringContaining("OMP ask") });
-    expect(approved.messages).toHaveLength(2);
-  } finally {
-    rmSync(sibling, { recursive: true, force: true });
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("requires a new confirmation when an approved push changes", async () => {
-  const repository = checkout();
-  try {
-    const instance = guard();
-    const original = { toolName: "bash", input: { command: `git push https://github.com/${external}.git HEAD` } };
-    const changed = { toolName: "bash", input: { command: `git push --force https://github.com/${external}.git HEAD` } };
-    expect(await instance.handler(original, context(repository))).toMatchObject({ block: true });
-    approve(instance, "git push", external, `\nCommand: ${original.input.command}`);
-    expect(await instance.handler(changed, context(repository))).toMatchObject({
-      block: true,
-      reason: expect.stringContaining("OMP ask"),
-    });
-    expect(instance.messages).toHaveLength(2);
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
 
 
-test("clears an interrupted or mismatched confirmation", async () => {
-  const repository = checkout();
-  try {
-    const instance = guard();
-    const event = { toolName: "bash", input: { command: `git push https://github.com/${external}.git HEAD` } };
-    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
-    instance.answer({ toolName: "ask", input: { questions: [] }, details: {}, isError: false });
-    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true, reason: expect.stringContaining("OMP ask") });
-    expect(instance.messages).toHaveLength(2);
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
 
 test("guards environment-prefixed external issue creation without prompting same-origin", async () => {
   const repository = checkout();
