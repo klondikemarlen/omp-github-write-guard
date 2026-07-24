@@ -15,6 +15,7 @@ import { authorizationKey } from "./authorization-key.ts";
 import { confirmationQuestion, confirmationQuestionId } from "./confirmation-question.ts";
 import { guardDecision } from "./decision.ts";
 import { localMutation } from "./local-mutation.ts";
+import { boundaryPolicy, type BoundaryCategory, type BoundaryPolicy } from "./policy.ts";
 
 export type AskPayload = {
   questions: [{
@@ -28,7 +29,7 @@ export type AskPayload = {
 
 export type RepositoryMutationHandoff =
   | { decision: "allow"; action?: string; currentRepository?: string; target?: string }
-  | { decision: "ask"; action: string; currentRepository?: string; target: string; fingerprint: string; ask: AskPayload }
+  | { decision: "ask"; action: string; category: BoundaryCategory; currentRepository?: string; target: string; fingerprint: string; ask: AskPayload }
   | { decision: "block"; action: string; currentRepository?: string; target?: string; reason: string };
 
 function hasExplicitBoundaryOverride(event: ToolCallEvent): boolean {
@@ -52,6 +53,7 @@ function askHandoff(
   target: string,
   event: ToolCallEvent,
   context: string,
+  category: BoundaryCategory,
   currentRepository?: string,
   description?: string,
 ): RepositoryMutationHandoff {
@@ -59,6 +61,7 @@ function askHandoff(
   return {
     decision: "ask",
     action,
+    category,
     currentRepository,
     target,
     fingerprint: authorizationKey(action, target, event.input, context),
@@ -115,6 +118,7 @@ function githubHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHan
     decision.target,
     event,
     currentRepository ?? currentCheckoutRoot(cwd) ?? cwd,
+    write.action === "git push" ? "git" : "github",
     currentRepository,
     write.description,
   );
@@ -127,17 +131,26 @@ function localHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHand
     return { decision: "block", action: mutation.action, reason: mutation.reason ?? "the local file target cannot be resolved" };
   }
 
-  return askHandoff(mutation.action, mutation.targets.join(", "), event, mutation.boundary);
+  return askHandoff(mutation.action, mutation.targets.join(", "), event, mutation.boundary, "local");
 }
 
+function applyScopePolicy(
+  handoff: RepositoryMutationHandoff,
+  policy: BoundaryPolicy,
+  allowExternalMutation: boolean,
+): RepositoryMutationHandoff {
+  if (handoff.decision !== "ask") return handoff;
+  if (policy.error) return { decision: "block", action: handoff.action, target: handoff.target, reason: policy.error };
+  if (!allowExternalMutation && !policy.exemptions.has(handoff.category)) return handoff;
+  return { decision: "allow", action: handoff.action, currentRepository: handoff.currentRepository, target: handoff.target };
+}
+
+
 export function repositoryMutationHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHandoff {
-  const allowMixed = hasExplicitBoundaryOverride(event);
-  const github = githubHandoff(event, cwd);
-  if (github.decision === "ask" && allowMixed) {
-    return { decision: "allow", action: github.action, currentRepository: github.currentRepository, target: github.target };
-  }
+  const allowExternalMutation = hasExplicitBoundaryOverride(event);
+  const policy = boundaryPolicy();
+  const github = applyScopePolicy(githubHandoff(event, cwd), policy, allowExternalMutation);
   if (github.decision !== "allow") return github;
-  const local = localHandoff(event, cwd);
-  if (local?.decision === "ask" && allowMixed) return { decision: "allow", action: local.action, target: local.target };
-  return local ?? github;
+  const local = applyScopePolicy(localHandoff(event, cwd) ?? github, policy, allowExternalMutation);
+  return local;
 }

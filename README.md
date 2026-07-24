@@ -15,6 +15,8 @@ Mutations inside the active repository stay silent. For GitHub writes, a target 
 
 Approval permits one exact retry; a prior standard external GitHub approval for the same action and target may authorize one boundary-equivalent retry so duplicate gates do not deadlock. Rejection or no UI blocks. An unresolved target blocks. The extension holds one in-memory, target-bound approval until its matching retry; an explicit `OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1` prefix (or `boundaryOverride: "allow-external-mutation"` on a direct local `write`/`edit`) allows one resolved external mutation without an Ask. Overrides never allow unresolved, compound, or unknown targets.
 
+Optional process-level exemptions use `OMP_REPOSITORY_BOUNDARY_GUARD_EXEMPT_CATEGORIES`, a comma-separated allowlist of categories: `local`, `git`, and `github`. For example, launch OMP with `OMP_REPOSITORY_BOUNDARY_GUARD_EXEMPT_CATEGORIES=github`; this is configuration for the guard process, not an inline prefix for an individual `gh` command. Exemptions apply only after a supported target is resolved; unknown or unresolved recognized mutations still block. The default is to enforce every category.
+
 It recognizes static local paths, structured edit patches, ordinary shell command sequences, and static GitHub arguments. Shell substitutions, functions, aliases, dynamically generated commands, arbitrary network clients, GitHub API calls outside `gh api`, and writes outside OMP are outside its grammar; run a direct supported command instead.
 
 ## Ask handoff

@@ -649,7 +649,7 @@ test("requires a new confirmation when an approved push changes", async () => {
   }
 });
 
-test("allows one explicit mixed-boundary override for resolved mutations", async () => {
+test("allows one explicit external-mutation override for resolved mutations", async () => {
   const repository = checkout();
   const otherCheckout = checkout(`https://github.com/${external}.git`);
   try {
@@ -679,6 +679,56 @@ test("allows one explicit mixed-boundary override for resolved mutations", async
     };
     expect(await instance.handler(localOverride, context(repository))).toBeUndefined();
   } finally {
+    rmSync(otherCheckout, { recursive: true, force: true });
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("applies explicit category exemptions only after resolution", async () => {
+  const repository = checkout();
+  const otherCheckout = checkout(`https://github.com/${external}.git`);
+  const variable = "OMP_REPOSITORY_BOUNDARY_GUARD_EXEMPT_CATEGORIES";
+  const previous = process.env[variable];
+  try {
+    const instance = guard();
+    process.env[variable] = "github";
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: `gh issue create --repo ${external}` } },
+      context(repository),
+    )).toBeUndefined();
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: 'gh issue create --repo "$TARGET"' } },
+      context(repository),
+    )).toMatchObject({ block: true });
+
+    process.env[variable] = "local";
+    expect(await instance.handler(
+      { toolName: "write", input: { path: `${otherCheckout}/created.ts`, content: "" } },
+      context(repository),
+    )).toBeUndefined();
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: `gh issue create --repo ${external}` } },
+      context(repository),
+    )).toMatchObject({ block: true });
+
+    process.env[variable] = "git";
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: `git push https://github.com/${external}.git HEAD` } },
+      context(repository),
+    )).toBeUndefined();
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: `gh issue create --repo ${external}` } },
+      context(repository),
+    )).toMatchObject({ block: true });
+
+    process.env[variable] = "github,unknown";
+    expect(await instance.handler(
+      { toolName: "bash", input: { command: `gh issue create --repo ${external}` } },
+      context(repository),
+    )).toMatchObject({ block: true, reason: expect.stringContaining("unknown category") });
+  } finally {
+    if (previous === undefined) delete process.env[variable];
+    else process.env[variable] = previous;
     rmSync(otherCheckout, { recursive: true, force: true });
     rmSync(repository, { recursive: true, force: true });
   }
