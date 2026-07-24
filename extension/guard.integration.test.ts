@@ -453,13 +453,13 @@ test("composes with an already-approved external GitHub gate", async () => {
       input: {
         questions: [{
           id: "confirm_external_github_write",
-          question: `Allow one GitHub issue creation to ${external}?\nIssue title: Approved externally`,
+          question: `Allow one GitHub issue creation to ${external}?\nIssue title: Approved externally\nBody: Original\nCommand: gh issue create --repo ${external} --title "Approved externally" --body "Original"`,
         }],
       },
       details: { selectedOptions: ["Approve"] },
       isError: false,
     });
-    const retry = { toolName: "bash", input: { command: `gh issue create --repo ${external} --title "Approved externally" --body 'Original'` } };
+    const retry = { toolName: "bash", input: { command: `gh issue create --repo ${external} --title "Approved externally" --body "Original"` } };
     expect(await instance.handler(retry, context(repository))).toBeUndefined();
     expect(instance.messages).toHaveLength(1);
   } finally {

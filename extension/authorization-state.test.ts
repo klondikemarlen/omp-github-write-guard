@@ -53,3 +53,18 @@ test("retains an external approval without a pending request", () => {
   expect(state.consumeExternal("Allow one GitHub issue creation to elsewhere/example?")).toBe(true);
   expect(state.consume("key")).toBe("missing");
 });
+
+test("does not consume an external approval for a different command", () => {
+  const state = new AuthorizationState();
+  const original = "Allow one GitHub API write to elsewhere/example?\nCommand: gh api repos/elsewhere/example/issues";
+  const changed = "Allow one GitHub API write to elsewhere/example?\nCommand: gh api repos/elsewhere/example/pulls";
+  state.record({
+    toolName: "ask",
+    input: { questions: [{ id: "confirm_external_github_write", question: original }] },
+    details: { selectedOptions: ["Approve"] },
+    isError: false,
+  });
+  state.resetFor("/checkout");
+  expect(state.consumeExternal(changed)).toBe(false);
+  expect(state.consumeExternal(original)).toBe(true);
+});

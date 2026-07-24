@@ -54,6 +54,15 @@ export class AuthorizationState {
       this.#externalQuestion.slice(0, storedEnd < 0 ? this.#externalQuestion.length : storedEnd) !==
       question.slice(0, expectedEnd < 0 ? question.length : expectedEnd)
     ) return false;
+    const storedDetails = this.#externalQuestion
+      .split("\n")
+      .slice(1)
+      .filter((line) => !line.startsWith("Current repository:") && !line.startsWith("Target repository:"));
+    const expectedDetails = question
+      .split("\n")
+      .slice(1)
+      .filter((line) => !line.startsWith("Current repository:") && !line.startsWith("Target repository:"));
+    if (storedDetails.join("\n") !== expectedDetails.join("\n")) return false;
     this.#externalQuestion = undefined;
     return true;
   }
