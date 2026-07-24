@@ -16,6 +16,7 @@ import { confirmationQuestion, confirmationQuestionId } from "./confirmation-que
 import { guardDecision } from "./decision.ts";
 import { localMutation } from "./local-mutation.ts";
 import { boundaryPolicy, type BoundaryCategory, type BoundaryPolicy } from "./policy.ts";
+const UNRESOLVED_TARGET = "an unresolved target";
 
 export type AskPayload = {
   questions: [{
@@ -29,8 +30,7 @@ export type AskPayload = {
 
 export type RepositoryMutationHandoff =
   | { decision: "allow"; action?: string; currentRepository?: string; target?: string }
-  | { decision: "ask"; action: string; category: BoundaryCategory; currentRepository?: string; target: string; fingerprint: string; ask: AskPayload }
-  | { decision: "block"; action: string; currentRepository?: string; target?: string; reason: string };
+  | { decision: "ask"; action: string; category: BoundaryCategory; currentRepository?: string; target: string; targetResolved: boolean; fingerprint: string; ask: AskPayload };
 
 function hasExplicitBoundaryOverride(event: ToolCallEvent): boolean {
   if ((event.toolName === "write" || event.toolName === "edit") && event.input.boundaryOverride === "allow-external-mutation") return true;
@@ -51,6 +51,7 @@ function writeFor(event: ToolCallEvent): GitHubWrite | undefined {
 function askHandoff(
   action: string,
   target: string,
+  targetResolved: boolean,
   event: ToolCallEvent,
   context: string,
   category: BoundaryCategory,
@@ -64,6 +65,7 @@ function askHandoff(
     category,
     currentRepository,
     target,
+    targetResolved,
     fingerprint: authorizationKey(action, target, event.input, context),
     ask: {
       questions: [{
@@ -78,6 +80,17 @@ function askHandoff(
       }],
     },
   };
+}
+
+function unresolvedHandoff(
+  action: string,
+  reason: string,
+  event: ToolCallEvent,
+  context: string,
+  category: BoundaryCategory,
+  currentRepository?: string,
+): RepositoryMutationHandoff {
+  return askHandoff(action, UNRESOLVED_TARGET, false, event, context, category, currentRepository, reason);
 }
 
 function githubHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHandoff {
@@ -110,12 +123,20 @@ function githubHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHan
   const decision = guardDecision(write, currentRepository);
   if (decision.allow) return { decision: "allow", action: write.action, currentRepository, target: write.target };
   if (!decision.target) {
-    return { decision: "block", action: decision.action, currentRepository, reason: decision.reason };
+    return unresolvedHandoff(
+      decision.action,
+      decision.reason,
+      event,
+      currentRepository ?? currentCheckoutRoot(cwd) ?? cwd,
+      write.action === "git push" ? "git" : "github",
+      currentRepository,
+    );
   }
 
   return askHandoff(
     decision.action,
     decision.target,
+    true,
     event,
     currentRepository ?? currentCheckoutRoot(cwd) ?? cwd,
     write.action === "git push" ? "git" : "github",
@@ -128,10 +149,10 @@ function localHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHand
   const mutation = localMutation(event, cwd);
   if (!mutation) return undefined;
   if (!mutation.targets) {
-    return { decision: "block", action: mutation.action, reason: mutation.reason ?? "the local file target cannot be resolved" };
+    return unresolvedHandoff(mutation.action, mutation.reason ?? "the local file target cannot be resolved", event, mutation.boundary, "local");
   }
 
-  return askHandoff(mutation.action, mutation.targets.join(", "), event, mutation.boundary, "local");
+  return askHandoff(mutation.action, mutation.targets.join(", "), true, event, mutation.boundary, "local");
 }
 
 function applyScopePolicy(
@@ -140,7 +161,7 @@ function applyScopePolicy(
   allowExternalMutation: boolean,
 ): RepositoryMutationHandoff {
   if (handoff.decision !== "ask") return handoff;
-  if (policy.error) return { decision: "block", action: handoff.action, target: handoff.target, reason: policy.error };
+  if (policy.error || !handoff.targetResolved) return handoff;
   if (!allowExternalMutation && !policy.exemptions.has(handoff.category)) return handoff;
   return { decision: "allow", action: handoff.action, currentRepository: handoff.currentRepository, target: handoff.target };
 }

@@ -79,7 +79,7 @@ test("resolves a fragment-first review-thread mutation before authorization", ()
   });
 });
 
-test("rejects a fragment-first mutation with a decoy repository target", () => {
+test("asks for a fragment-first mutation with a decoy repository target", () => {
   const handoff = withReviewThreadRepository("elsewhere/example", () => {
     return repositoryMutationHandoff(
       graphqlMutation(fragmentFirstReviewThreadMutation, " -f dummy=/repos/klondikemarlen/omp-repository-boundary-guard"),
@@ -88,8 +88,10 @@ test("rejects a fragment-first mutation with a decoy repository target", () => {
   });
 
   expect(handoff).toMatchObject({
-    decision: "block",
+    decision: "ask",
     action: "GitHub API write",
+    target: "an unresolved target",
+    targetResolved: false,
   });
 });
 

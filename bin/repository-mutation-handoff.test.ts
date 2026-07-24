@@ -25,6 +25,10 @@ test("prints repository mutation decisions", () => {
     target: external,
     ask: { questions: [{ id: "confirm_repository_boundary_mutation" }] },
   });
-  expect(handoff('gh issue create --repo "$TARGET"')).toMatchObject({ decision: "block" });
+  expect(handoff('gh issue create --repo "$TARGET"')).toMatchObject({
+    decision: "ask",
+    target: "an unresolved target",
+    targetResolved: false,
+  });
   expect(handoff("git status --short")).toMatchObject({ decision: "allow" });
 });

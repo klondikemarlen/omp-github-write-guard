@@ -10,15 +10,9 @@ export function createRepositoryBoundaryGuard(): (pi: ExtensionAPI) => void {
       authorization.resetFor(context.cwd);
       const handoff = repositoryMutationHandoff(event, context.cwd);
       if (handoff.decision === "allow") return;
-      if (handoff.decision === "block") {
-        return {
-          block: true,
-          reason: `Blocked ${handoff.action} targeting ${handoff.target ?? "an unresolved target"}: ${handoff.reason}.`,
-        };
-      }
 
       const reason = `Blocked ${handoff.action} targeting ${handoff.target}: confirmation is required.`;
-      if (!context.hasUI) return { block: true, reason: `${reason} Interactive confirmation requires OMP UI.` };
+      if (!context.hasUI) return;
 
       const authorizationResult = authorization.consume(handoff.fingerprint);
       if (authorizationResult === "authorized") return;

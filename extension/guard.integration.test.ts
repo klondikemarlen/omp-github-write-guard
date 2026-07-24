@@ -342,7 +342,7 @@ test("resolves write targets without redefining the active repository boundary",
     expect(await instance.handler(
       { toolName: "write", input: { path: "file:///tmp/outside.ts", content: "" } },
       context(repository),
-    )).toMatchObject({ block: true, reason: expect.stringContaining("cannot be resolved") });
+    )).toMatchObject({ block: true, reason: expect.stringContaining("unresolved target") });
   } finally {
     rmSync(otherCheckout, { recursive: true, force: true });
     rmSync(sameRepositoryCheckout, { recursive: true, force: true });
@@ -376,7 +376,7 @@ test("anchors GitHub mutation authorization to the active checkout", () => {
   }
 });
 
-test("requires named push remotes to resolve through Git configuration", () => {
+test("asks when named push remotes cannot resolve through Git configuration", () => {
   const repository = checkout();
   try {
     expect(
@@ -384,7 +384,7 @@ test("requires named push remotes to resolve through Git configuration", () => {
         { toolName: "bash", input: { command: `git push ${external} HEAD` } },
         repository,
       ),
-    ).toMatchObject({ decision: "block", action: "git push", reason: expect.stringContaining("cannot be resolved") });
+    ).toMatchObject({ decision: "ask", action: "git push", target: "an unresolved target", targetResolved: false });
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -461,7 +461,7 @@ test("classifies global options, attached and quoted -C paths, and command seque
   }
 });
 
-test("fails closed for an unsupported repository-affecting global option", async () => {
+test("asks for an unsupported repository-affecting global option", async () => {
   const repository = checkout();
   try {
     const instance = guard();
@@ -469,8 +469,8 @@ test("fails closed for an unsupported repository-affecting global option", async
       { toolName: "bash", input: { command: "git --git-dir=/tmp/other.git push origin HEAD" } },
       context(repository),
     );
-    expect(result).toMatchObject({ block: true, reason: expect.stringContaining("cannot be resolved") });
-    expect(instance.messages).toEqual([]);
+    expect(result).toMatchObject({ block: true, reason: expect.stringContaining("unresolved target") });
+    expect(instance.messages).toHaveLength(1);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -725,7 +725,7 @@ test("applies explicit category exemptions only after resolution", async () => {
     expect(await instance.handler(
       { toolName: "bash", input: { command: `gh issue create --repo ${external}` } },
       context(repository),
-    )).toMatchObject({ block: true, reason: expect.stringContaining("unknown category") });
+    )).toMatchObject({ block: true, reason: expect.stringContaining("confirmation is required") });
   } finally {
     if (previous === undefined) delete process.env[variable];
     else process.env[variable] = previous;
@@ -772,7 +772,7 @@ test("guards environment-prefixed external issue creation without prompting same
   }
 });
 
-test("fails closed for dynamic or missing issue targets", async () => {
+test("asks for dynamic or missing issue targets", async () => {
   const repository = checkout();
   try {
     const instance = guard();
@@ -781,9 +781,27 @@ test("fails closed for dynamic or missing issue targets", async () => {
       "gh issue create --repo --title malformed",
     ]) {
       const result = await instance.handler({ toolName: "bash", input: { command } }, context(repository));
-      expect(result).toMatchObject({ block: true, reason: expect.stringContaining("cannot be resolved") });
+      expect(result).toMatchObject({ block: true, reason: expect.stringContaining("unresolved target") });
     }
-    expect(instance.messages).toEqual([]);
+    expect(instance.messages).toHaveLength(1);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("allows approved retries for unresolved external and local targets", async () => {
+  const repository = checkout();
+  try {
+    const instance = guard();
+    const externalEvent = { toolName: "bash", input: { command: 'gh issue create --repo "$TARGET"' } };
+    expect(await instance.handler(externalEvent, context(repository))).toMatchObject({ block: true });
+    approve(instance, "GitHub issue creation", "an unresolved target");
+    expect(await instance.handler(externalEvent, context(repository))).toBeUndefined();
+
+    const localEvent = { toolName: "write", input: { path: "file:///tmp/outside.ts", content: "" } };
+    expect(await instance.handler(localEvent, context(repository))).toMatchObject({ block: true });
+    approve(instance, "file write", "an unresolved target");
+    expect(await instance.handler(localEvent, context(repository))).toBeUndefined();
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -896,10 +914,7 @@ test("does not consume approval when the retry has no UI", async () => {
     expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
     approve(instance, "GitHub issue creation", external, "\nIssue title: UI-bound issue");
 
-    expect(await instance.handler(event, context(repository, false))).toMatchObject({
-      block: true,
-      reason: expect.stringContaining("Interactive confirmation requires OMP UI"),
-    });
+    expect(await instance.handler(event, context(repository, false))).toBeUndefined();
     expect(await instance.handler(event, context(repository))).toBeUndefined();
     expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
   } finally {
@@ -989,7 +1004,7 @@ test("does not prompt same-origin issue creation", async () => {
   }
 });
 
-test("passes registered internal dispatch through and blocks unknown URIs", async () => {
+test("passes registered internal dispatch through and asks for unknown URIs", async () => {
   const repository = checkout();
   try {
     const instance = guard();
@@ -1002,15 +1017,15 @@ test("passes registered internal dispatch through and blocks unknown URIs", asyn
     expect(await instance.handler(
       { toolName: "write", input: { path: "xd://unknown", content: "" } },
       context(repository),
-    )).toMatchObject({ block: true, reason: expect.stringContaining("cannot be resolved") });
+    )).toMatchObject({ block: true, reason: expect.stringContaining("unresolved target") });
     expect(await instance.handler(
       {
         toolName: "edit",
         input: { input: "*** Begin Patch\n[xd://unknown#ABCD]\n*** End Patch\n" },
       },
       context(repository),
-    )).toMatchObject({ block: true, reason: expect.stringContaining("cannot be resolved") });
-    expect(instance.messages).toEqual([]);
+    )).toMatchObject({ block: true, reason: expect.stringContaining("unresolved target") });
+    expect(instance.messages).toHaveLength(1);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -1075,13 +1090,13 @@ test("guards repository-scoped pull request and API writes", async () => {
         { toolName: "write", input: { path: "xd://github", content: JSON.stringify({ op: "pr_push", pr: 1 }) } },
         repository,
       ),
-    ).toMatchObject({ decision: "block", action: "GitHub pull request update" });
+    ).toMatchObject({ decision: "ask", action: "GitHub pull request update", target: "an unresolved target", targetResolved: false });
     expect(
       repositoryMutationHandoff(
         { toolName: "write", input: { path: "xd://github", content: JSON.stringify({ op: "unknown_write" }) } },
         repository,
       ),
-    ).toMatchObject({ decision: "block", action: "GitHub device request" });
+    ).toMatchObject({ decision: "ask", action: "GitHub device request", target: "an unresolved target", targetResolved: false });
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -1106,23 +1121,24 @@ test("permits approved target-explicit pull request and issue mutations", async 
   }
 });
 
-test("blocks targetless pull request mutations outside a GitHub checkout", () => {
+test("asks for targetless pull request mutations outside a GitHub checkout", () => {
   const unresolved = `/tmp/omp-repository-boundary-guard-${crypto.randomUUID()}`;
   mkdirSync(unresolved);
   try {
     expect(
       repositoryMutationHandoff({ toolName: "bash", input: { command: "gh pr edit 79 --body Updated" } }, unresolved),
     ).toMatchObject({
-      decision: "block",
+      decision: "ask",
       action: "GitHub pull request update",
-      reason: expect.stringContaining("no resolvable GitHub origin"),
+      target: "an unresolved target",
+      targetResolved: false,
     });
   } finally {
     rmSync(unresolved, { recursive: true, force: true });
   }
 });
 
-test("fails closed without interactive confirmation", async () => {
+test("allows external mutations without interactive confirmation", async () => {
   const repository = checkout();
   try {
     const instance = guard();
@@ -1130,7 +1146,7 @@ test("fails closed without interactive confirmation", async () => {
       { toolName: "bash", input: { command: `gh issue create --repo ${external}` } },
       context(repository, false),
     );
-    expect(result).toMatchObject({ block: true, reason: expect.stringContaining("Interactive confirmation") });
+    expect(result).toBeUndefined();
     expect(instance.messages).toEqual([]);
   } finally {
     rmSync(repository, { recursive: true, force: true });
@@ -1168,7 +1184,7 @@ test("returns an exact external-write ask handoff", () => {
   }
 });
 
-test("returns a block handoff for an unresolved external target", () => {
+test("returns an ask handoff for an unresolved external target", () => {
   const repository = checkout();
   try {
     expect(
@@ -1177,9 +1193,10 @@ test("returns a block handoff for an unresolved external target", () => {
         repository,
       ),
     ).toMatchObject({
-      decision: "block",
+      decision: "ask",
       action: "GitHub issue creation",
-      reason: expect.stringContaining("cannot be resolved"),
+      target: "an unresolved target",
+      targetResolved: false,
     });
   } finally {
     rmSync(repository, { recursive: true, force: true });
