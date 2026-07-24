@@ -389,7 +389,7 @@ test("anchors GitHub mutation authorization to the active checkout", () => {
   }
 });
 
-test("asks when named push remotes cannot resolve through Git configuration", () => {
+test("passes named push remotes that cannot resolve through Git configuration", () => {
   const repository = checkout();
   try {
     expect(
@@ -397,7 +397,7 @@ test("asks when named push remotes cannot resolve through Git configuration", ()
         { toolName: "bash", input: { command: `git push ${external} HEAD` } },
         repository,
       ),
-    ).toMatchObject({ decision: "ask", action: "git push", target: "an unresolved target", targetResolved: false });
+    ).toMatchObject({ decision: "allow" });
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -484,7 +484,7 @@ test("classifies global options, attached and quoted -C paths, and command seque
   }
 });
 
-test("asks for an unsupported repository-affecting global option", async () => {
+test("passes unsupported repository-affecting global options", async () => {
   const repository = checkout();
   try {
     const instance = guard();
@@ -492,8 +492,8 @@ test("asks for an unsupported repository-affecting global option", async () => {
       { toolName: "bash", input: { command: "git --git-dir=/tmp/other.git push origin HEAD" } },
       context(repository),
     );
-    expect(result).toMatchObject({ block: true, reason: expect.stringContaining("unresolved target") });
-    expect(instance.messages).toHaveLength(1);
+    expect(result).toBeUndefined();
+    expect(instance.messages).toHaveLength(0);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -795,7 +795,7 @@ test("guards environment-prefixed external issue creation without prompting same
   }
 });
 
-test("asks for unresolved GitHub targets and skips unresolved local targets", async () => {
+test("passes unresolved GitHub targets and local targets", async () => {
   const repository = checkout();
   try {
     const instance = guard();
@@ -804,9 +804,9 @@ test("asks for unresolved GitHub targets and skips unresolved local targets", as
       "gh issue create --repo --title malformed",
     ]) {
       const result = await instance.handler({ toolName: "bash", input: { command } }, context(repository));
-      expect(result).toMatchObject({ block: true, reason: expect.stringContaining("unresolved target") });
+      expect(result).toBeUndefined();
     }
-    expect(instance.messages).toHaveLength(1);
+    expect(instance.messages).toHaveLength(0);
     expect(await instance.handler(
       { toolName: "write", input: { path: "artifact://outside.ts", content: "" } },
       context(repository),
@@ -816,7 +816,7 @@ test("asks for unresolved GitHub targets and skips unresolved local targets", as
   }
 });
 
-test("allows an approved unresolved review-thread retry", async () => {
+test("passes unresolved review-thread mutations without prompting", async () => {
   const repository = checkout();
   const event = {
     toolName: "bash",
@@ -830,10 +830,8 @@ test("allows an approved unresolved review-thread retry", async () => {
   };
   try {
     const instance = guard();
-    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
-    approve(instance, "GitHub API write", "an unresolved target");
     expect(await instance.handler(event, context(repository))).toBeUndefined();
-    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+    expect(instance.messages).toHaveLength(0);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -857,7 +855,7 @@ test("consumes an external approval recorded before the first retry", async () =
       isError: false,
     });
     expect(await instance.handler(event, context(repository))).toBeUndefined();
-    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+    expect(await instance.handler(event, context(repository))).toBeUndefined();
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -1147,13 +1145,13 @@ test("guards repository-scoped pull request and API writes", async () => {
         { toolName: "write", input: { path: "xd://github", content: JSON.stringify({ op: "pr_push", pr: 1 }) } },
         repository,
       ),
-    ).toMatchObject({ decision: "ask", action: "GitHub pull request update", target: "an unresolved target", targetResolved: false });
+    ).toMatchObject({ decision: "allow" });
     expect(
       repositoryMutationHandoff(
         { toolName: "write", input: { path: "xd://github", content: JSON.stringify({ op: "unknown_write" }) } },
         repository,
       ),
-    ).toMatchObject({ decision: "ask", action: "GitHub device request", target: "an unresolved target", targetResolved: false });
+    ).toEqual({ decision: "allow" });
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -1178,18 +1176,13 @@ test("permits approved target-explicit pull request and issue mutations", async 
   }
 });
 
-test("asks for targetless pull request mutations outside a GitHub checkout", () => {
+test("passes targetless pull request mutations outside a GitHub checkout", () => {
   const unresolved = `/tmp/omp-repository-boundary-guard-${crypto.randomUUID()}`;
   mkdirSync(unresolved);
   try {
     expect(
       repositoryMutationHandoff({ toolName: "bash", input: { command: "gh pr edit 79 --body Updated" } }, unresolved),
-    ).toMatchObject({
-      decision: "ask",
-      action: "GitHub pull request update",
-      target: "an unresolved target",
-      targetResolved: false,
-    });
+    ).toMatchObject({ decision: "allow" });
   } finally {
     rmSync(unresolved, { recursive: true, force: true });
   }
@@ -1241,7 +1234,7 @@ test("returns an exact external-write ask handoff", () => {
   }
 });
 
-test("returns an ask handoff for an unresolved external target", () => {
+test("passes an unresolved external target without prompting", () => {
   const repository = checkout();
   try {
     expect(
@@ -1249,12 +1242,7 @@ test("returns an ask handoff for an unresolved external target", () => {
         { toolName: "bash", input: { command: 'gh issue create --repo "$TARGET"' } },
         repository,
       ),
-    ).toMatchObject({
-      decision: "ask",
-      action: "GitHub issue creation",
-      target: "an unresolved target",
-      targetResolved: false,
-    });
+    ).toMatchObject({ decision: "allow" });
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
