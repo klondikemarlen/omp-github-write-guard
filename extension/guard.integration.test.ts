@@ -656,26 +656,26 @@ test("allows one explicit mixed-boundary override for resolved mutations", async
     const instance = guard();
     const githubOverride = {
       toolName: "bash",
-      input: { command: `OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_MIXED=1 gh issue create --repo ${external} --title "Explicit override"` },
+      input: { command: `OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1 gh issue create --repo ${external} --title "Explicit override"` },
     };
     expect(await instance.handler(githubOverride, context(repository))).toBeUndefined();
     expect(instance.messages).toEqual([]);
 
     const compoundOverride = {
       toolName: "bash",
-      input: { command: `true && OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_MIXED=1 gh issue create --repo ${external}` },
+      input: { command: `true && OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1 gh issue create --repo ${external}` },
     };
     expect(await instance.handler(compoundOverride, context(repository))).toMatchObject({ block: true });
 
     const unresolvedOverride = {
       toolName: "bash",
-      input: { command: "OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_MIXED=1 gh issue create --repo \"$TARGET\"" },
+      input: { command: "OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1 gh issue create --repo \"$TARGET\"" },
     };
     expect(await instance.handler(unresolvedOverride, context(repository))).toMatchObject({ block: true });
 
     const localOverride = {
       toolName: "write",
-      input: { path: `${otherCheckout}/created.ts`, content: "", boundaryOverride: "allow-mixed" },
+      input: { path: `${otherCheckout}/created.ts`, content: "", boundaryOverride: "allow-external-mutation" },
     };
     expect(await instance.handler(localOverride, context(repository))).toBeUndefined();
   } finally {

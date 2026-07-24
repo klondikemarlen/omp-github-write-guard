@@ -27,7 +27,7 @@ test("does not apply a directory change after the mutation", () => {
 });
 
 test("requires the explicit override on one command", () => {
-  expect(hasBoundaryOverride("OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_MIXED=1 gh issue create")).toBe(true);
-  expect(hasBoundaryOverride("true && OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_MIXED=1 gh issue create")).toBe(false);
-  expect(hasBoundaryOverride("echo OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_MIXED=1")).toBe(false);
+  expect(hasBoundaryOverride("OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1 gh issue create")).toBe(true);
+  expect(hasBoundaryOverride("true && OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1 gh issue create")).toBe(false);
+  expect(hasBoundaryOverride("echo OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1")).toBe(false);
 });
