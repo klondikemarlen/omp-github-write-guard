@@ -17,7 +17,7 @@ export function createRepositoryBoundaryGuard(): (pi: ExtensionAPI) => void {
       const authorizationResult = authorization.consume(handoff.fingerprint);
       if (authorizationResult === "authorized") return;
       const question = handoff.ask.questions[0].question;
-      if (authorization.consumeExternal(handoff.fingerprint, question)) return;
+      if (authorization.consumeExternal(question)) return;
       const authorizationDetail =
         authorizationResult === "mismatched"
           ? " An approval exists but does not match this exact retry."

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { githubTarget } from "./target.ts";
+import { githubTarget, isHelpRequest } from "./target.ts";
 
 const current = "owner/current";
 const external = "elsewhere/example";
@@ -27,6 +27,12 @@ test("ignores unlisted payload file values without losing positionals", () => {
 
 test("fails closed for an ambiguous unknown option operand", () => {
   expect(githubTarget(["gh", "issue", "create", "--unknown", external], 3)).toMatchObject({ targetUnresolved: true });
+});
+
+test("recognizes non-mutating help and version flags", () => {
+  expect(isHelpRequest(["gh", "issue", "create", "--help", "--repo", external], 3)).toBe(true);
+  expect(isHelpRequest(["gh", "issue", "create", "--version"], 3)).toBe(true);
+  expect(isHelpRequest(["gh", "issue", "create", "--title", "--help"], 3)).toBe(false);
 });
 
 test("includes bounded issue details in the target description", () => {

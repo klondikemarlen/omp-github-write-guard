@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 
+import { AuthorizationState } from "../extension/authorization-state.ts";
 import type { ToolCallEvent } from "../extension/contract.ts";
 import { repositoryMutationHandoff } from "../guard/handoff.ts";
 
@@ -93,6 +94,34 @@ test("asks for a fragment-first mutation with a decoy repository target", () => 
     target: "an unresolved target",
     targetResolved: false,
   });
+});
+
+test("authorizes an approved retry for an unresolved review-thread mutation", () => {
+  const handoff = withReviewThreadRepository("elsewhere/example", () => {
+    return repositoryMutationHandoff(
+      graphqlMutation(fragmentFirstReviewThreadMutation, " -f dummy=/repos/klondikemarlen/omp-repository-boundary-guard"),
+      process.cwd(),
+    );
+  });
+  if (handoff.decision !== "ask") throw new Error("expected an unresolved review-thread ask");
+
+  const authorization = new AuthorizationState();
+  authorization.resetFor(process.cwd());
+  authorization.begin(handoff.fingerprint, handoff.ask.questions[0].question);
+  authorization.record({
+    toolName: "ask",
+    input: handoff.ask,
+    details: { selectedOptions: ["Approve"] },
+    isError: false,
+  });
+  const retry = withReviewThreadRepository("elsewhere/example", () => {
+    return repositoryMutationHandoff(
+      graphqlMutation(fragmentFirstReviewThreadMutation, " -f dummy=/repos/klondikemarlen/omp-repository-boundary-guard"),
+      process.cwd(),
+    );
+  });
+  if (retry.decision !== "ask") throw new Error("expected the retry to remain guarded");
+  expect(authorization.consume(retry.fingerprint)).toBe("authorized");
 });
 
 test("forwards @-prefixed thread IDs literally", () => {

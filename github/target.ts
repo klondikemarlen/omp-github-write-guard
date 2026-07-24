@@ -14,6 +14,22 @@ function repositoryValue(word: string): string | undefined {
 function flagHasValue(word: string): boolean {
   return Object.keys(VALUE_FLAGS).some((flag) => word.startsWith(`${flag}=`));
 }
+const NON_MUTATING_FLAGS: Record<string, true> = { "-h": true, "--help": true, "--version": true };
+
+export function isHelpRequest(words: (string | undefined)[], index: number): boolean {
+  let skipNext = false;
+  for (; index < words.length; index += 1) {
+    const word = words[index];
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (typeof word !== "string") continue;
+    if (NON_MUTATING_FLAGS[word]) return true;
+    if (Object.hasOwn(VALUE_FLAGS, word) || flagHasValue(word)) skipNext = !word.includes("=");
+  }
+  return false;
+}
 
 export function githubTarget(words: (string | undefined)[], index: number, title?: string) {
   let target: string | undefined;

@@ -27,6 +27,7 @@ const PUSH_FLAGS: Record<string, true> = {
   "--verbose": true,
 };
 const GLOBAL_FLAGS: Record<string, true> = { "-P": true, "--no-pager": true, "--paginate": true };
+const NON_MUTATING_FLAGS: Record<string, true> = { "-h": true, "-n": true, "--help": true, "--version": true };
 const GLOBAL_OPTIONS: Record<string, true> = { "-c": true, "--config": true };
 
 export function gitPushWrite(words: (string | undefined)[]): GitHubWrite | undefined {
@@ -38,6 +39,7 @@ export function gitPushWrite(words: (string | undefined)[]): GitHubWrite | undef
   while (words[index] !== "push") {
     const word = words[index];
     if (typeof word !== "string") return undefined;
+    if (NON_MUTATING_FLAGS[word]) return undefined;
     if (word === "-C") {
       const directory = words[index + 1];
       if (typeof directory !== "string") return undefined;
@@ -62,6 +64,7 @@ export function gitPushWrite(words: (string | undefined)[]): GitHubWrite | undef
     return word.startsWith("-") ? { action: "git push", directories, targetUnresolved: true } : undefined;
   }
 
+  if (words.slice(index + 1).some((word) => word === "--dry-run" || typeof word === "string" && NON_MUTATING_FLAGS[word])) return undefined;
   for (index += 1; index < words.length; index += 1) {
     const word = words[index];
     if (typeof word !== "string" || (word.startsWith("-") && !PUSH_FLAGS[word])) {
