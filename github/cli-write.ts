@@ -1,7 +1,7 @@
 import type { ToolInput } from "../extension/contract.ts";
 import { executableIndex } from "../shell/executable-index.ts";
 import { githubApiWrite } from "./api-write.ts";
-import { githubTarget } from "./target.ts";
+import { githubTarget, isHelpRequest } from "./target.ts";
 import type { GitHubWrite } from "./write.ts";
 
 type Operation = { action: string; title?: string };
@@ -34,5 +34,5 @@ export function githubCliWrite(input: ToolInput, words: (string | undefined)[]):
   if (words[index + 1] === "api") return githubApiWrite(words, index + 2, input);
 
   const operation = OPERATIONS[`${words[index + 1]} ${words[index + 2]}`];
-  return operation ? { action: operation.action, ...githubTarget(words, index + 3, operation.title) } : undefined;
+  return operation && !isHelpRequest(words, index + 3) ? { action: operation.action, ...githubTarget(words, index + 3, operation.title) } : undefined;
 }

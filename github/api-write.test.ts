@@ -155,6 +155,14 @@ test("keeps explicit GET requests with fields read-only", () => {
   ).toBeUndefined();
 });
 
+test("keeps API help and version requests read-only", () => {
+  expect(
+    githubApiWrite(["gh", "api", "repos/elsewhere/example/issues", "--method", "POST", "--help"], 2, {
+      command: "gh api repos/elsewhere/example/issues --method POST --help",
+    }),
+  ).toBeUndefined();
+});
+
 test("guards mutating methods with fields", () => {
   expect(
     githubApiWrite(

@@ -174,6 +174,8 @@ test("permits writes in same-repository checkouts and asks before external write
     const target = `${otherCheckout}/outside.ts`;
     const event = { toolName: "write", input: { path: target, content: "export {};\n" } };
     expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+    expect(instance.messages[0]).toContain(`Target path(s): ${target}`);
+    expect(instance.messages[0]).not.toContain("Target repository:");
     approve(instance, "file write", target);
     expect(await instance.handler(event, context(repository))).toBeUndefined();
   } finally {
@@ -339,10 +341,21 @@ test("resolves write targets without redefining the active repository boundary",
     expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
     approve(instance, "file write", target);
     expect(await instance.handler(event, context(repository))).toBeUndefined();
+
+    for (const [path, resolved] of [
+      [`file://${otherCheckout}/double-slash.ts`, `${otherCheckout}/double-slash.ts`],
+      [`file:${otherCheckout}/single-slash.ts`, `${otherCheckout}/single-slash.ts`],
+    ]) {
+      const uriEvent = { toolName: "write", input: { path, content: "" } };
+      expect(await instance.handler(uriEvent, context(repository))).toMatchObject({ block: true });
+      expect(instance.messages.at(-1)).toContain(`Target path(s): ${resolved}`);
+      approve(instance, "file write", resolved);
+      expect(await instance.handler(uriEvent, context(repository))).toBeUndefined();
+    }
     expect(await instance.handler(
-      { toolName: "write", input: { path: "file:///tmp/outside.ts", content: "" } },
+      { toolName: "write", input: { path: "artifact://outside.ts", content: "" } },
       context(repository),
-    )).toMatchObject({ block: true, reason: expect.stringContaining("unresolved target") });
+    )).toBeUndefined();
   } finally {
     rmSync(otherCheckout, { recursive: true, force: true });
     rmSync(sameRepositoryCheckout, { recursive: true, force: true });
@@ -394,7 +407,17 @@ test("does not intercept local non-push Git commands", async () => {
   const repository = checkout();
   try {
     const instance = guard();
-    for (const command of ["git status --short", "git -C . add file.ts", 'git commit -m "mention push"']) {
+    for (const command of [
+      "git status --short",
+      "git -C . add file.ts",
+      'git commit -m "mention push"',
+      "git push --help",
+      "git push --version",
+      "git push -n https://github.com/elsewhere/example.git HEAD",
+      "git push --dry-run https://github.com/elsewhere/example.git HEAD",
+      `gh issue create --help --repo ${external}`,
+      `gh api repos/${external}/issues --method POST --help`,
+    ]) {
       expect(await instance.handler({ toolName: "bash", input: { command } }, context(repository))).toBeUndefined();
     }
     expect(instance.messages).toEqual([]);
@@ -671,7 +694,7 @@ test("allows one explicit external-mutation override for resolved mutations", as
       toolName: "bash",
       input: { command: "OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1 gh issue create --repo \"$TARGET\"" },
     };
-    expect(await instance.handler(unresolvedOverride, context(repository))).toMatchObject({ block: true });
+    expect(await instance.handler(unresolvedOverride, context(repository))).toBeUndefined();
 
     const localOverride = {
       toolName: "write",
@@ -699,7 +722,7 @@ test("applies explicit category exemptions only after resolution", async () => {
     expect(await instance.handler(
       { toolName: "bash", input: { command: 'gh issue create --repo "$TARGET"' } },
       context(repository),
-    )).toMatchObject({ block: true });
+    )).toBeUndefined();
 
     process.env[variable] = "local";
     expect(await instance.handler(
@@ -772,40 +795,50 @@ test("guards environment-prefixed external issue creation without prompting same
   }
 });
 
-test("asks for dynamic or missing issue targets", async () => {
+test("asks for unresolved GitHub targets and skips unresolved local targets", async () => {
   const repository = checkout();
   try {
     const instance = guard();
     for (const command of [
-      'gh issue create --repo \"$TARGET\"',
+      'gh issue create --repo "$TARGET"',
       "gh issue create --repo --title malformed",
     ]) {
       const result = await instance.handler({ toolName: "bash", input: { command } }, context(repository));
       expect(result).toMatchObject({ block: true, reason: expect.stringContaining("unresolved target") });
     }
     expect(instance.messages).toHaveLength(1);
+    expect(await instance.handler(
+      { toolName: "write", input: { path: "artifact://outside.ts", content: "" } },
+      context(repository),
+    )).toBeUndefined();
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
 });
 
-test("allows approved retries for unresolved external and local targets", async () => {
+test("allows an approved unresolved review-thread retry", async () => {
   const repository = checkout();
+  const event = {
+    toolName: "bash",
+    input: {
+      command: "gh api graphql -f query=$QUERY -f threadId=$THREAD_ID",
+      env: {
+        QUERY: "mutation { resolveReviewThread(input: { threadId: $threadId }) { thread { isResolved } } }",
+        THREAD_ID: "PRRT_unresolved",
+      },
+    },
+  };
   try {
     const instance = guard();
-    const externalEvent = { toolName: "bash", input: { command: 'gh issue create --repo "$TARGET"' } };
-    expect(await instance.handler(externalEvent, context(repository))).toMatchObject({ block: true });
-    approve(instance, "GitHub issue creation", "an unresolved target");
-    expect(await instance.handler(externalEvent, context(repository))).toBeUndefined();
-
-    const localEvent = { toolName: "write", input: { path: "file:///tmp/outside.ts", content: "" } };
-    expect(await instance.handler(localEvent, context(repository))).toMatchObject({ block: true });
-    approve(instance, "file write", "an unresolved target");
-    expect(await instance.handler(localEvent, context(repository))).toBeUndefined();
+    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
+    approve(instance, "GitHub API write", "an unresolved target");
+    expect(await instance.handler(event, context(repository))).toBeUndefined();
+    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
 });
+
 
 test("shows and safely serializes GitHub device issue titles in confirmations", async () => {
   const repository = checkout();
@@ -1004,11 +1037,11 @@ test("does not prompt same-origin issue creation", async () => {
   }
 });
 
-test("passes registered internal dispatch through and asks for unknown URIs", async () => {
+test("passes registered and unresolved internal dispatches without prompting", async () => {
   const repository = checkout();
   try {
     const instance = guard();
-    for (const path of ["xd://lsp", "xd://report_issue", "xd://recall", "xd://retain", "xd://reflect", "xd://memory_edit"]) {
+    for (const path of ["xd://lsp", "xd://report_issue", "xd://recall", "xd://retain", "xd://reflect", "xd://memory_edit", "xd://learner_file_ticket", "xd://browser", "skill://browser-qa", "issue://79?comments=1"]) {
       expect(await instance.handler(
         { toolName: "write", input: { path, content: "" } },
         context(repository),
@@ -1017,15 +1050,15 @@ test("passes registered internal dispatch through and asks for unknown URIs", as
     expect(await instance.handler(
       { toolName: "write", input: { path: "xd://unknown", content: "" } },
       context(repository),
-    )).toMatchObject({ block: true, reason: expect.stringContaining("unresolved target") });
+    )).toBeUndefined();
     expect(await instance.handler(
       {
         toolName: "edit",
         input: { input: "*** Begin Patch\n[xd://unknown#ABCD]\n*** End Patch\n" },
       },
       context(repository),
-    )).toMatchObject({ block: true, reason: expect.stringContaining("unresolved target") });
-    expect(instance.messages).toHaveLength(1);
+    )).toBeUndefined();
+    expect(instance.messages).toHaveLength(0);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

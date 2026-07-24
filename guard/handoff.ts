@@ -58,7 +58,7 @@ function askHandoff(
   currentRepository?: string,
   description?: string,
 ): RepositoryMutationHandoff {
-  const question = confirmationQuestion(action, target, event.input, description, currentRepository);
+  const question = confirmationQuestion(action, target, event.input, description, currentRepository, category);
   return {
     decision: "ask",
     action,
@@ -147,10 +147,7 @@ function githubHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHan
 
 function localHandoff(event: ToolCallEvent, cwd: string): RepositoryMutationHandoff | undefined {
   const mutation = localMutation(event, cwd);
-  if (!mutation) return undefined;
-  if (!mutation.targets) {
-    return unresolvedHandoff(mutation.action, mutation.reason ?? "the local file target cannot be resolved", event, mutation.boundary, "local");
-  }
+  if (!mutation || !mutation.targets) return undefined;
 
   return askHandoff(mutation.action, mutation.targets.join(", "), true, event, mutation.boundary, "local");
 }
@@ -161,8 +158,7 @@ function applyScopePolicy(
   allowExternalMutation: boolean,
 ): RepositoryMutationHandoff {
   if (handoff.decision !== "ask") return handoff;
-  if (policy.error || !handoff.targetResolved) return handoff;
-  if (!allowExternalMutation && !policy.exemptions.has(handoff.category)) return handoff;
+  if (policy.error || (!allowExternalMutation && !policy.exemptions.has(handoff.category))) return handoff;
   return { decision: "allow", action: handoff.action, currentRepository: handoff.currentRepository, target: handoff.target };
 }
 

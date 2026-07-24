@@ -1,6 +1,7 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { ToolCallEvent } from "../extension/contract.ts";
 import { currentCheckoutBoundary } from "../git/current-checkout.ts";
@@ -68,15 +69,32 @@ function canonicalTarget(path: string, cwd: string): string | undefined {
 
 const REGISTERED_INTERNAL_TARGETS: Record<string, true> = {
   "xd://github": true,
+  "xd://browser": true,
   "xd://lsp": true,
   "xd://report_issue": true,
   "xd://recall": true,
   "xd://retain": true,
   "xd://reflect": true,
   "xd://memory_edit": true,
+  "xd://learner_file_ticket": true,
 };
 
+function isRegisteredInternalTarget(path: string): boolean {
+  return Object.hasOwn(REGISTERED_INTERNAL_TARGETS, path) || path.startsWith("skill://");
+}
+
 const URI_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
+const FILE_URI = /^file:/i;
+
+function localTarget(path: string): string | undefined {
+  if (!URI_SCHEME.test(path) && !FILE_URI.test(path)) return path;
+  if (!FILE_URI.test(path)) return undefined;
+  try {
+    return fileURLToPath(path);
+  } catch {
+    return undefined;
+  }
+}
 
 
 function isTemporaryTarget(path: string): boolean {
@@ -137,16 +155,21 @@ function editPaths(input: Record<string, unknown>): string[] | undefined {
 function mutationPaths(event: ToolCallEvent): { action: string; paths: string[] } | undefined {
   if (event.toolName === "write") {
     if (typeof event.input.path !== "string") return { action: "file write", paths: [] };
-    if (Object.hasOwn(REGISTERED_INTERNAL_TARGETS, event.input.path)) return undefined;
-    if (URI_SCHEME.test(event.input.path)) return { action: "file write", paths: [] };
-    return { action: "file write", paths: [event.input.path] };
+    if (isRegisteredInternalTarget(event.input.path)) return undefined;
+    const path = localTarget(event.input.path);
+    return path ? { action: "file write", paths: [path] } : { action: "file write", paths: [] };
   }
 
   if (event.toolName !== "edit") return undefined;
   const paths = editPaths(event.input);
   if (!paths) return { action: "file edit", paths: [] };
-  const localPaths = paths.filter((path) => !Object.hasOwn(REGISTERED_INTERNAL_TARGETS, path));
-  if (localPaths.some((path) => URI_SCHEME.test(path))) return { action: "file edit", paths: [] };
+  const localPaths: string[] = [];
+  for (const path of paths) {
+    if (isRegisteredInternalTarget(path)) continue;
+    const localPath = localTarget(path);
+    if (!localPath) return { action: "file edit", paths: [] };
+    localPaths.push(localPath);
+  }
   return localPaths.length ? { action: "file edit", paths: localPaths } : undefined;
 }
 

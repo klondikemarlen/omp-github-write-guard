@@ -1,6 +1,6 @@
 import type { ToolInput } from "../extension/contract.ts";
 import { normalizeRepository } from "./normalize-repository.ts";
-import { githubTarget } from "./target.ts";
+import { githubTarget, isHelpRequest } from "./target.ts";
 import type { GitHubWrite } from "./write.ts";
 
 function environmentQuery(input: ToolInput): string | undefined {
@@ -298,6 +298,7 @@ function reviewThread(document: string): ReviewThread | undefined {
 }
 
 export function githubApiWrite(words: (string | undefined)[], index: number, input: ToolInput): GitHubWrite | undefined {
+  if (isHelpRequest(words, index)) return undefined;
   const isGraphQL = words[index] === "graphql";
   let document: string | undefined;
   if (isGraphQL) document = graphqlQuery(words, index + 1, input);
