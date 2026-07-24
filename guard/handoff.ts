@@ -32,7 +32,7 @@ export type RepositoryMutationHandoff =
   | { decision: "block"; action: string; currentRepository?: string; target?: string; reason: string };
 
 function hasExplicitBoundaryOverride(event: ToolCallEvent): boolean {
-  if ((event.toolName === "write" || event.toolName === "edit") && event.input.boundaryOverride === "allow-mixed") return true;
+  if ((event.toolName === "write" || event.toolName === "edit") && event.input.boundaryOverride === "allow-external-mutation") return true;
   return event.toolName === "bash" && typeof event.input.command === "string" && hasBoundaryOverride(event.input.command);
 }
 

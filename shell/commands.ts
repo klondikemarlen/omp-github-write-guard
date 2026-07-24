@@ -3,7 +3,7 @@ import { parse } from "shell-quote";
 const COMMAND_BOUNDARIES: Record<string, true> = { "&&": true, "||": true, ";": true, "|": true, "|&": true, "&": true };
 const REDIRECTIONS: Record<string, true> = { "<": true, ">": true, ">>": true, "<&": true, ">&": true, "<<<": true };
 
-const BOUNDARY_OVERRIDE = "OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_MIXED=1";
+const BOUNDARY_OVERRIDE = "OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1";
 
 export type ShellCommandSegment = {
   words: (string | undefined)[];
