@@ -1041,7 +1041,7 @@ test("passes registered and unresolved internal dispatches without prompting", a
   const repository = checkout();
   try {
     const instance = guard();
-    for (const path of ["xd://lsp", "xd://report_issue", "xd://recall", "xd://retain", "xd://reflect", "xd://memory_edit", "xd://learner_file_ticket", "xd://browser", "skill://browser-qa", "issue://79?comments=1"]) {
+    for (const path of ["xd://lsp", "xd://report_issue", "xd://recall", "xd://retain", "xd://reflect", "xd://memory_edit", "xd://learner_file_ticket", "xd://browser", "skill://browser-qa", "issue://79?comments=1", "pr://76?comments=1"]) {
       expect(await instance.handler(
         { toolName: "write", input: { path, content: "" } },
         context(repository),
