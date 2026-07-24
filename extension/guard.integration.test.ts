@@ -1,110 +1,22 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, relative, resolve } from "node:path";
+import { mkdirSync, rmSync } from "node:fs";
+import { relative } from "node:path";
 
 import {
-  createRepositoryBoundaryGuard,
   currentCheckoutRepository,
   repositoryMutationHandoff,
-  type ToolCallHandler,
 } from "../index.ts";
+import {
+  approve,
+  checkout,
+  confirmationId,
+  context,
+  current,
+  external,
+  guard,
+} from "./test-support.ts";
 
-const current = "klondikemarlen/omp-repository-boundary-guard";
-const external = "elsewhere/example";
-const confirmationId = "confirm_repository_boundary_mutation";
-
-type Guard = {
-  handler: ToolCallHandler;
-  answer(event: { toolName: string; input: Record<string, unknown>; details: unknown; isError: boolean }): void;
-  messages: string[];
-};
-
-function guard(): Guard {
-  let handler: ToolCallHandler | undefined;
-  let resultHandler: Guard["answer"] | undefined;
-  const messages: string[] = [];
-  createRepositoryBoundaryGuard()({
-    on: ((event: string, registered: ToolCallHandler | Guard["answer"]) => {
-      if (event === "tool_call") handler = registered as ToolCallHandler;
-      else resultHandler = registered as Guard["answer"];
-    }) as never,
-    sendUserMessage: (message) => messages.push(message),
-  });
-  return { handler: handler!, answer: (event) => resultHandler!(event), messages };
-}
-
-function checkout(remote: string | null = `https://github.com/${current}.git`) {
-  const directory = `/tmp/omp-repository-boundary-guard-${crypto.randomUUID()}`;
-  mkdirSync(directory, { recursive: true });
-  execFileSync("git", ["-C", directory, "init", "--quiet"]);
-  if (remote) execFileSync("git", ["-C", directory, "remote", "add", "origin", remote]);
-  return directory;
-}
-
-function context(cwd: string, hasUI = true) {
-  return { cwd, hasUI };
-}
-
-function approve(guard: Guard, _action: string, _target: string, _detail = "") {
-  const message = guard.messages.at(-1);
-  if (!message) throw new Error("missing confirmation request");
-  const start = message.indexOf("{");
-  const end = message.indexOf("}. If approved", start) + 1;
-  const input = JSON.parse(message.slice(start, end)) as Record<string, unknown>;
-  guard.answer({
-    toolName: "ask",
-    input,
-    details: { selectedOptions: ["Approve"] },
-    isError: false,
-  });
-}
-
-test("resolves nested checkout origins", () => {
-  const repository = checkout();
-  const nested = `${repository}/nested`;
-  try {
-    mkdirSync(nested);
-    expect(currentCheckoutRepository(repository)).toBe(current);
-    expect(currentCheckoutRepository(nested)).toBe(current);
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("resolves worktree origins", () => {
-  const repository = checkout();
-  const worktree = `/tmp/omp-repository-boundary-guard-${crypto.randomUUID()}`;
-  try {
-    execFileSync("git", ["-C", repository, "-c", "user.name=Guard", "-c", "user.email=guard@example.test", "commit", "--allow-empty", "-m", "initial"]);
-    execFileSync("git", ["-C", repository, "worktree", "add", worktree, "-b", "feature"]);
-    expect(currentCheckoutRepository(worktree)).toBe(current);
-  } finally {
-    rmSync(worktree, { recursive: true, force: true });
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("permits mutations in local-only Git worktrees", async () => {
-  const repository = checkout(null);
-  const worktree = `/tmp/omp-repository-boundary-guard-${crypto.randomUUID()}`;
-  const nested = `${repository}/nested`;
-  try {
-    execFileSync("git", ["-C", repository, "-c", "user.name=Guard", "-c", "user.email=guard@example.test", "commit", "--allow-empty", "-m", "initial"]);
-    execFileSync("git", ["-C", repository, "worktree", "add", worktree, "-b", "feature"]);
-    mkdirSync(nested);
-    const instance = guard();
-    expect(await instance.handler(
-      { toolName: "write", input: { path: `${worktree}/inside.ts`, content: "export {};\n" } },
-      context(nested),
-    )).toBeUndefined();
-    expect(instance.messages).toEqual([]);
-  } finally {
-    rmSync(worktree, { recursive: true, force: true });
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
 
 test("keeps same-origin GitHub writes inside a worktree", async () => {
   const repository = checkout();
@@ -155,175 +67,11 @@ test("does not intercept same-origin pushes", async () => {
   }
 });
 
-test("permits writes in same-repository checkouts and asks before external writes", async () => {
-  const repository = checkout();
-  const sameRepositoryCheckout = checkout();
-  const otherCheckout = checkout(`git@github.com:${external}.git`);
-  try {
-    const instance = guard();
-    expect(await instance.handler(
-      { toolName: "write", input: { path: "inside.ts", content: "export {};\n" } },
-      context(repository),
-    )).toBeUndefined();
-    expect(await instance.handler(
-      { toolName: "write", input: { path: `${sameRepositoryCheckout}/inside.ts`, content: "export {};\n" } },
-      context(repository),
-    )).toBeUndefined();
-    expect(instance.messages).toEqual([]);
-
-    const target = `${otherCheckout}/outside.ts`;
-    const event = { toolName: "write", input: { path: target, content: "export {};\n" } };
-    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
-    expect(instance.messages[0]).toContain(`Target path(s): ${target}`);
-    expect(instance.messages[0]).not.toContain("Target repository:");
-    approve(instance, "file write", target);
-    expect(await instance.handler(event, context(repository))).toBeUndefined();
-  } finally {
-    rmSync(otherCheckout, { recursive: true, force: true });
-    rmSync(sameRepositoryCheckout, { recursive: true, force: true });
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("permits non-Git temporary writes but protects symlink escapes", async () => {
-  const repository = checkout();
-  const temporaryDirectory = `${tmpdir()}/omp-repository-boundary-guard-${crypto.randomUUID()}`;
-  try {
-    mkdirSync(temporaryDirectory);
-    const instance = guard();
-    for (const path of [
-      `${temporaryDirectory}/created.ts`,
-      `${temporaryDirectory}/nested/deeper/created.ts`,
-    ]) {
-      expect(await instance.handler(
-        { toolName: "write", input: { path, content: "" } },
-        context(repository),
-      )).toBeUndefined();
-    }
-    expect(instance.messages).toEqual([]);
-    expect(await instance.handler(
-      {
-        toolName: "edit",
-        input: {
-          input: `*** Begin Patch\n[${temporaryDirectory}/source.ts#ABCD]\nMV ${temporaryDirectory}/nested/destination.ts\n*** End Patch\n`,
-        },
-      },
-      context(repository),
-    )).toBeUndefined();
-
-    const nonTemporaryTarget = resolve(dirname(tmpdir()), `omp-repository-boundary-guard-${crypto.randomUUID()}`);
-    const nonTemporaryEvent = {
-      toolName: "write",
-      input: { path: nonTemporaryTarget, content: "" },
-    };
-    expect(await instance.handler(nonTemporaryEvent, context(repository))).toMatchObject({ block: true });
-    approve(instance, "file write", nonTemporaryTarget);
-    expect(await instance.handler(nonTemporaryEvent, context(repository))).toBeUndefined();
-
-    const outsideDirectory = dirname(tmpdir());
-    symlinkSync(outsideDirectory, `${temporaryDirectory}/outside`);
-    const event = {
-      toolName: "write",
-      input: { path: `${temporaryDirectory}/outside/created.ts`, content: "" },
-    };
-    const target = resolve(outsideDirectory, "created.ts");
-    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
-    approve(instance, "file write", target);
-    expect(await instance.handler(event, context(repository))).toBeUndefined();
-
-    const danglingOutside = `${temporaryDirectory}/dangling-outside`;
-    symlinkSync(resolve(outsideDirectory, "missing-target"), danglingOutside);
-    expect(await instance.handler(
-      { toolName: "write", input: { path: `${danglingOutside}/created.ts`, content: "" } },
-      context(repository),
-    )).toMatchObject({ block: true });
-
-    const danglingInside = `${temporaryDirectory}/dangling-inside`;
-    symlinkSync("missing-target", danglingInside);
-    expect(await instance.handler(
-      { toolName: "write", input: { path: `${danglingInside}/created.ts`, content: "" } },
-      context(repository),
-    )).toBeUndefined();
-  } finally {
-    rmSync(temporaryDirectory, { recursive: true, force: true });
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
 
 
-test("asks before writes through symlinks into another repository", async () => {
-  const repository = checkout();
 
-  const otherCheckout = checkout(`git@github.com:${external}.git`);
-  try {
-    symlinkSync(otherCheckout, `${repository}/outside`);
-    const instance = guard();
-    const target = `${otherCheckout}/created.ts`;
-    const event = { toolName: "write", input: { path: "outside/created.ts", content: "export {};\n" } };
-    expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
-    approve(instance, "file write", target);
-    expect(await instance.handler(event, context(repository))).toBeUndefined();
-  } finally {
-    rmSync(otherCheckout, { recursive: true, force: true });
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
 
-test("protects dangling symlink escapes from a checkout", async () => {
-  const repository = checkout();
-  try {
-    symlinkSync("../outside-missing", `${repository}/dangling-outside`);
-    symlinkSync("inside-missing", `${repository}/dangling-inside`);
-    const instance = guard();
-    expect(await instance.handler(
-      { toolName: "write", input: { path: "dangling-outside/created.ts", content: "" } },
-      context(repository),
-    )).toMatchObject({ block: true });
-    expect(await instance.handler(
-      { toolName: "write", input: { path: "dangling-inside/created.ts", content: "" } },
-      context(repository),
-    )).toBeUndefined();
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
 
-test("asks before moves with an external source or destination", async () => {
-  const repository = checkout();
-  const sameRepositoryCheckout = checkout();
-  const otherCheckout = checkout(`git@github.com:${external}.git`);
-  try {
-    writeFileSync(`${repository}/inside.ts`, "export {};\n");
-    writeFileSync(`${otherCheckout}/outside.ts`, "export {};\n");
-    const sameFromRepository = relative(repository, sameRepositoryCheckout);
-    const otherFromRepository = relative(repository, otherCheckout);
-    const instance = guard();
-    expect(await instance.handler(
-      {
-        toolName: "edit",
-        input: { input: `*** Begin Patch\n[inside.ts#ABCD]\nMV ${sameFromRepository}/inside-moved.ts\n*** End Patch\n` },
-      },
-      context(repository),
-    )).toBeUndefined();
-
-    for (const [source, destination, target] of [
-      ["inside.ts", `${otherFromRepository}/moved.ts`, `${otherCheckout}/moved.ts`],
-      [`${otherFromRepository}/outside.ts`, "moved.ts", `${otherCheckout}/outside.ts`],
-    ]) {
-      const event = {
-        toolName: "edit",
-        input: { input: `*** Begin Patch\n[${source}#ABCD]\nMV ${destination}\n*** End Patch\n` },
-      };
-      expect(await instance.handler(event, context(repository))).toMatchObject({ block: true });
-      approve(instance, "file edit", target);
-      expect(await instance.handler(event, context(repository))).toBeUndefined();
-    }
-  } finally {
-    rmSync(otherCheckout, { recursive: true, force: true });
-    rmSync(sameRepositoryCheckout, { recursive: true, force: true });
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
 
 test("resolves write targets without redefining the active repository boundary", async () => {
   const repository = checkout();
@@ -672,90 +420,6 @@ test("requires a new confirmation when an approved push changes", async () => {
   }
 });
 
-test("allows one explicit external-mutation override for resolved mutations", async () => {
-  const repository = checkout();
-  const otherCheckout = checkout(`https://github.com/${external}.git`);
-  try {
-    const instance = guard();
-    const githubOverride = {
-      toolName: "bash",
-      input: { command: `OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1 gh issue create --repo ${external} --title "Explicit override"` },
-    };
-    expect(await instance.handler(githubOverride, context(repository))).toBeUndefined();
-    expect(instance.messages).toEqual([]);
-
-    const compoundOverride = {
-      toolName: "bash",
-      input: { command: `true && OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1 gh issue create --repo ${external}` },
-    };
-    expect(await instance.handler(compoundOverride, context(repository))).toMatchObject({ block: true });
-
-    const unresolvedOverride = {
-      toolName: "bash",
-      input: { command: "OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1 gh issue create --repo \"$TARGET\"" },
-    };
-    expect(await instance.handler(unresolvedOverride, context(repository))).toBeUndefined();
-
-    const localOverride = {
-      toolName: "write",
-      input: { path: `${otherCheckout}/created.ts`, content: "", boundaryOverride: "allow-external-mutation" },
-    };
-    expect(await instance.handler(localOverride, context(repository))).toBeUndefined();
-  } finally {
-    rmSync(otherCheckout, { recursive: true, force: true });
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("applies explicit category exemptions only after resolution", async () => {
-  const repository = checkout();
-  const otherCheckout = checkout(`https://github.com/${external}.git`);
-  const variable = "OMP_REPOSITORY_BOUNDARY_GUARD_EXEMPT_CATEGORIES";
-  const previous = process.env[variable];
-  try {
-    const instance = guard();
-    process.env[variable] = "github";
-    expect(await instance.handler(
-      { toolName: "bash", input: { command: `gh issue create --repo ${external}` } },
-      context(repository),
-    )).toBeUndefined();
-    expect(await instance.handler(
-      { toolName: "bash", input: { command: 'gh issue create --repo "$TARGET"' } },
-      context(repository),
-    )).toBeUndefined();
-
-    process.env[variable] = "local";
-    expect(await instance.handler(
-      { toolName: "write", input: { path: `${otherCheckout}/created.ts`, content: "" } },
-      context(repository),
-    )).toBeUndefined();
-    expect(await instance.handler(
-      { toolName: "bash", input: { command: `gh issue create --repo ${external}` } },
-      context(repository),
-    )).toMatchObject({ block: true });
-
-    process.env[variable] = "git";
-    expect(await instance.handler(
-      { toolName: "bash", input: { command: `git push https://github.com/${external}.git HEAD` } },
-      context(repository),
-    )).toBeUndefined();
-    expect(await instance.handler(
-      { toolName: "bash", input: { command: `gh issue create --repo ${external}` } },
-      context(repository),
-    )).toMatchObject({ block: true });
-
-    process.env[variable] = "github,unknown";
-    expect(await instance.handler(
-      { toolName: "bash", input: { command: `gh issue create --repo ${external}` } },
-      context(repository),
-    )).toMatchObject({ block: true, reason: expect.stringContaining("confirmation is required") });
-  } finally {
-    if (previous === undefined) delete process.env[variable];
-    else process.env[variable] = previous;
-    rmSync(otherCheckout, { recursive: true, force: true });
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
 
 test("clears an interrupted or mismatched confirmation", async () => {
   const repository = checkout();

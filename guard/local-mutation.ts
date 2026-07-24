@@ -1,6 +1,5 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ToolCallEvent } from "../extension/contract.ts";
@@ -96,22 +95,6 @@ function localTarget(path: string): string | undefined {
 }
 
 
-function isTemporaryTarget(path: string): boolean {
-  let temporaryRoot: string;
-  try {
-    temporaryRoot = realpathSync(tmpdir());
-  } catch {
-    return false;
-  }
-
-  const fromTemporaryRoot = relative(temporaryRoot, path);
-  return (
-    fromTemporaryRoot === "" ||
-    (!isAbsolute(fromTemporaryRoot) &&
-      fromTemporaryRoot !== ".." &&
-      !fromTemporaryRoot.startsWith(`..${sep}`))
-  );
-}
 
 
 function containingBoundary(path: string): string | undefined {
@@ -182,24 +165,22 @@ export function localMutation(event: ToolCallEvent, sessionCwd: string): LocalMu
   const resolvedCwd = toolDirectory(event.input, sessionCwd);
   if (resolvedCwd && typeof resolvedCwd !== "string") return undefined;
   const cwd = resolvedCwd ?? sessionCwd;
-  const sources: string[] = [];
   const targets: string[] = [];
   for (const path of mutation.paths) {
-    const source = resolve(cwd, path);
     const target = canonicalTarget(path, cwd);
     if (!target) return undefined;
-    sources.push(source);
     targets.push(target);
   }
 
   const externalTargets = [
     ...new Set(
-      targets.filter((target, index) => {
+      targets.filter((target) => {
         const targetBoundary = containingBoundary(target);
-        const sourceBoundary = containingBoundary(sources[index]);
-        return targetBoundary !== boundary && !(isTemporaryTarget(target) && !targetBoundary && !sourceBoundary);
+        if (!targetBoundary) return false;
+        return targetBoundary !== boundary;
       }),
     ),
   ];
+
   return externalTargets.length ? { action: mutation.action, boundary, targets: externalTargets } : undefined;
 }

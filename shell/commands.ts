@@ -3,7 +3,6 @@ import { parse } from "shell-quote";
 const COMMAND_BOUNDARIES: Record<string, true> = { "&&": true, "||": true, ";": true, "|": true, "|&": true, "&": true };
 const REDIRECTIONS: Record<string, true> = { "<": true, ">": true, ">>": true, "<&": true, ">&": true, "<<<": true };
 
-const BOUNDARY_OVERRIDE = "OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1";
 
 export type ShellCommandSegment = {
   words: (string | undefined)[];
@@ -45,15 +44,6 @@ export function shellCommandSegments(command: string): ShellCommandSegment[] {
   }
 }
 
-export function hasBoundaryOverride(command: string): boolean {
-  const segments = shellCommandSegments(command);
-  if (segments.length !== 1) return false;
-  const { words } = segments[0];
-  for (let index = 0; typeof words[index] === "string" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]!); index += 1) {
-    if (words[index] === BOUNDARY_OVERRIDE) return true;
-  }
-  return false;
-}
 
 export function shellCommands(command: string): (string | undefined)[][] {
   return shellCommandSegments(command).map(({ words }) => words);

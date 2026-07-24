@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 
-import { hasBoundaryOverride } from "./commands.ts";
 import { toolDirectory } from "./directory.ts";
 
 test("tracks a supported later cd before a GitHub command", () => {
@@ -24,10 +23,4 @@ test("fails closed for unsupported compound operators", () => {
 
 test("does not apply a directory change after the mutation", () => {
   expect(toolDirectory({ command: "gh issue create && cd /tmp/external" }, "/workspace")).toBeUndefined();
-});
-
-test("requires the explicit override on one command", () => {
-  expect(hasBoundaryOverride("OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1 gh issue create")).toBe(true);
-  expect(hasBoundaryOverride("true && OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1 gh issue create")).toBe(false);
-  expect(hasBoundaryOverride("echo OMP_REPOSITORY_BOUNDARY_GUARD_ALLOW_EXTERNAL_MUTATION=1")).toBe(false);
 });

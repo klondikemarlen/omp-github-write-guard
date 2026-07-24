@@ -1,6 +1,6 @@
 import type { ToolInput } from "../extension/contract.ts";
-import type { BoundaryCategory } from "./policy.ts";
 
+export type BoundaryCategory = "local" | "git" | "github";
 export const confirmationQuestionId = "confirm_repository_boundary_mutation";
 
 export function confirmationQuestion(
