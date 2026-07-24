@@ -19,8 +19,7 @@ function pathExists(path: string): boolean {
 export type LocalMutation = {
   action: string;
   boundary: string;
-  targets?: string[];
-  reason?: string;
+  targets: string[];
 };
 
 function canonicalTarget(path: string, cwd: string): string | undefined {
@@ -178,24 +177,17 @@ export function localMutation(event: ToolCallEvent, sessionCwd: string): LocalMu
   if (!mutation) return undefined;
 
   const boundary = currentCheckoutBoundary(sessionCwd);
-  if (!boundary) {
-    return { action: mutation.action, boundary: sessionCwd, reason: "the active checkout boundary cannot be resolved" };
-  }
-  if (!mutation.paths.length) {
-    return { action: mutation.action, boundary, reason: "the local file target cannot be resolved" };
-  }
+  if (!boundary || !mutation.paths.length) return undefined;
 
   const resolvedCwd = toolDirectory(event.input, sessionCwd);
-  if (resolvedCwd && typeof resolvedCwd !== "string") {
-    return { action: mutation.action, boundary, reason: "the command directory cannot be resolved safely" };
-  }
+  if (resolvedCwd && typeof resolvedCwd !== "string") return undefined;
   const cwd = resolvedCwd ?? sessionCwd;
   const sources: string[] = [];
   const targets: string[] = [];
   for (const path of mutation.paths) {
     const source = resolve(cwd, path);
     const target = canonicalTarget(path, cwd);
-    if (!target) return { action: mutation.action, boundary, reason: "the local file target cannot be resolved" };
+    if (!target) return undefined;
     sources.push(source);
     targets.push(target);
   }

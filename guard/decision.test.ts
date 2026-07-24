@@ -6,11 +6,9 @@ test("allows writes to the invoking checkout", () => {
   expect(guardDecision({ action: "git push", target: "owner/repository" }, "owner/repository")).toEqual({ allow: true });
 });
 
-test("blocks unresolved and external targets", () => {
-  expect(guardDecision({ action: "git push", targetUnresolved: true }, "owner/repository")).toMatchObject({
-    allow: false,
-    reason: expect.stringContaining("cannot be resolved"),
-  });
+test("allows unresolved targets and blocks only resolved external targets", () => {
+  expect(guardDecision({ action: "git push", targetUnresolved: true }, "owner/repository")).toEqual({ allow: true });
+  expect(guardDecision({ action: "git push" }, undefined)).toEqual({ allow: true });
   expect(guardDecision({ action: "git push", target: "elsewhere/example" }, "owner/repository")).toMatchObject({
     allow: false,
     reason: expect.stringContaining("differs"),

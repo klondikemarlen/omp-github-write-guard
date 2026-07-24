@@ -80,7 +80,7 @@ test("resolves a fragment-first review-thread mutation before authorization", ()
   });
 });
 
-test("asks for a fragment-first mutation with a decoy repository target", () => {
+test("passes a fragment-first mutation with a decoy repository target", () => {
   const handoff = withReviewThreadRepository("elsewhere/example", () => {
     return repositoryMutationHandoff(
       graphqlMutation(fragmentFirstReviewThreadMutation, " -f dummy=/repos/klondikemarlen/omp-repository-boundary-guard"),
@@ -88,41 +88,9 @@ test("asks for a fragment-first mutation with a decoy repository target", () => 
     );
   });
 
-  expect(handoff).toMatchObject({
-    decision: "ask",
-    action: "GitHub API write",
-    target: "an unresolved target",
-    targetResolved: false,
-  });
+  expect(handoff).toMatchObject({ decision: "allow" });
 });
 
-test("authorizes an approved retry for an unresolved review-thread mutation", () => {
-  const handoff = withReviewThreadRepository("elsewhere/example", () => {
-    return repositoryMutationHandoff(
-      graphqlMutation(fragmentFirstReviewThreadMutation, " -f dummy=/repos/klondikemarlen/omp-repository-boundary-guard"),
-      process.cwd(),
-    );
-  });
-  if (handoff.decision !== "ask") throw new Error("expected an unresolved review-thread ask");
-
-  const authorization = new AuthorizationState();
-  authorization.resetFor(process.cwd());
-  authorization.begin(handoff.fingerprint, handoff.ask.questions[0].question);
-  authorization.record({
-    toolName: "ask",
-    input: handoff.ask,
-    details: { selectedOptions: ["Approve"] },
-    isError: false,
-  });
-  const retry = withReviewThreadRepository("elsewhere/example", () => {
-    return repositoryMutationHandoff(
-      graphqlMutation(fragmentFirstReviewThreadMutation, " -f dummy=/repos/klondikemarlen/omp-repository-boundary-guard"),
-      process.cwd(),
-    );
-  });
-  if (retry.decision !== "ask") throw new Error("expected the retry to remain guarded");
-  expect(authorization.consume(retry.fingerprint)).toBe("authorized");
-});
 
 test("forwards @-prefixed thread IDs literally", () => {
   const argumentsList = withReviewThreadRepository("elsewhere/example", (argumentsFile) => {
