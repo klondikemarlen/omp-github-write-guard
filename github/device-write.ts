@@ -25,11 +25,11 @@ export function githubDeviceWrite(input: ToolInput): GitHubWrite | undefined {
   if (input.path !== "xd://github" || typeof input.content !== "string") return undefined;
   try {
     const request = JSON.parse(input.content) as Record<string, unknown>;
-    if (typeof request.op !== "string") return { action: "GitHub device request", targetUnresolved: true };
+    if (typeof request.op !== "string" || !request.op) return undefined;
     if (READ_OPERATIONS[request.op]) return undefined;
 
     const operation = WRITE_OPERATIONS[request.op];
-    if (!operation) return { action: "GitHub device request", targetUnresolved: true };
+    if (!operation) return undefined;
     const target = repositoryReference(request.repo) ?? repositoryReference(request.pr);
     const hasTarget = request.repo !== undefined || request.pr !== undefined;
     return {
@@ -39,6 +39,6 @@ export function githubDeviceWrite(input: ToolInput): GitHubWrite | undefined {
       description: operation.title && typeof request.title === "string" ? `${operation.title}: ${request.title}` : undefined,
     };
   } catch {
-    return { action: "GitHub device request", targetUnresolved: true };
+    return undefined;
   }
 }
